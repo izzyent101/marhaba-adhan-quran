@@ -1,6 +1,7 @@
 package com.mpls.salattv
 
 import android.graphics.Color as AndroidColor
+import android.media.audiofx.LoudnessEnhancer
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -100,8 +101,10 @@ private val QURAN_STATIONS = listOf(
     QuranStation("https://stream.radiojar.com/0tpy1h0kxtzuv", "Saudi Quran Radio"),
     QuranStation("https://backup.qurango.net/radio/maher", "Sheikh Maher Al-Muaiqly")
 )
-// Quran radio plays at this volume (10%); the adhan plays at full volume (100%).
-private const val QURAN_VOLUME = 0.1f
+// Quran radio plays at this volume (5%); the adhan plays at full volume (100%)
+// plus a loudness boost, because the adhan source file is quietly mastered.
+private const val QURAN_VOLUME = 0.05f
+private const val ADHAN_BOOST_MB = 1500 // +15 dB loudness boost for the adhan
 // Egyptian adhan played at each prayer time, at 100% volume.
 private const val ADHAN_URL = "https://www.islamcan.com/audio/adhan/azan4.mp3"
 // At each prayer time, Quran audio is muted for this long (adhan + prayer), then resumes.
@@ -848,15 +851,27 @@ private fun StreamView(
     // button is pressed. Test auto-stops when the adhan audio finishes.
     val adhanTest = remember { mutableStateOf(false) }
     val adhanPlayer = remember { ExoPlayer.Builder(context).build() }
+    // Loudness booster attached to the adhan's audio session (+12 dB).
+    val adhanBooster = remember { arrayOfNulls<LoudnessEnhancer>(1) }
     DisposableEffect(adhanPlayer) {
         val listener = object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
                 if (state == Player.STATE_ENDED) adhanTest.value = false
             }
+            override fun onAudioSessionIdChanged(audioSessionId: Int) {
+                try {
+                    adhanBooster[0]?.release()
+                    adhanBooster[0] = LoudnessEnhancer(audioSessionId).apply {
+                        setTargetGain(ADHAN_BOOST_MB)
+                        enabled = true
+                    }
+                } catch (_: Exception) {}
+            }
         }
         adhanPlayer.addListener(listener)
         onDispose {
             adhanPlayer.removeListener(listener)
+            try { adhanBooster[0]?.release() } catch (_: Exception) {}
             adhanPlayer.release()
         }
     }
