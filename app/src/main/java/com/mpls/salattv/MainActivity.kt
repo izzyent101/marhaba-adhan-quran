@@ -713,7 +713,7 @@ private fun StreamView(
 
     // 24/7 Quran radio. Muted during prayer or if user mutes; rotates stations on failure.
     val stationIndex = remember { intArrayOf(0) }
-    var currentReciter by remember { mutableStateOf(QURAN_STATIONS[0].reciter) }
+    val currentReciter = remember { mutableStateOf(QURAN_STATIONS[0].reciter) }
     val quranPos = remember { longArrayOf(0L) }
     val quranProgressTs = remember { longArrayOf(0L) }
 
@@ -760,7 +760,7 @@ private fun StreamView(
             try {
                 if (switchStation) {
                     stationIndex[0] = (stationIndex[0] + 1) % QURAN_STATIONS.size
-                    currentReciter = QURAN_STATIONS[stationIndex[0]].reciter
+                    currentReciter.value = QURAN_STATIONS[stationIndex[0]].reciter
                 }
                 quranPlayer.stop(); quranPlayer.clearMediaItems()
                 quranPlayer.setMediaItem(MediaItem.fromUri(QURAN_STATIONS[stationIndex[0]].url))
@@ -934,7 +934,7 @@ private fun StreamView(
                             EqualizerIcon()
                             Column {
                                 Text("Now Playing · Holy Qur'an", color = Amber, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
-                                Text(currentReciter, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                                Text(currentReciter.value, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Bold, maxLines = 1)
                             }
                         }
                     }
