@@ -104,9 +104,10 @@ private val QURAN_STATIONS = listOf(
 // Quran radio plays at this volume (5%); the adhan plays at full volume (100%)
 // plus a loudness boost, because the adhan source file is quietly mastered.
 private const val QURAN_VOLUME = 0.05f
-private const val ADHAN_BOOST_MB = 1500 // +15 dB loudness boost for the adhan
-// Egyptian adhan played at each prayer time, at 100% volume.
-private const val ADHAN_URL = "https://www.islamcan.com/audio/adhan/azan4.mp3"
+private const val ADHAN_BOOST_MB = 600 // +6 dB extra boost (file is already loud-mastered)
+// HD adhan (Mishary Al-Afasy, loudness-mastered) played at each prayer, 100% volume.
+private const val ADHAN_URL =
+    "https://github.com/izzyent101/marhaba-adhan-quran/releases/download/quran-audio/adhan.mp3"
 // At each prayer time, Quran audio is muted for this long (adhan + prayer), then resumes.
 private const val PRAYER_MUTE_WINDOW_MS = 15L * 60L * 1000L
 private const val UPDATE_CHECK_INTERVAL_MS = 6L * 60L * 60L * 1000L // every 6 hours
@@ -1161,25 +1162,25 @@ private fun SkyBackground(isDay: Boolean, modifier: Modifier = Modifier) {
     Canvas(modifier = modifier) {
         val w = size.width; val h = size.height
         if (isDay) {
-            // Daytime: deep blue sky gradient with a soft sun glow top-left.
+            // Daytime: bright sky-blue gradient with a warm sun glow top-left.
             drawRect(
                 Brush.verticalGradient(
-                    0f to Color(0xFF14284A),
-                    0.55f to Color(0xFF0A1428),
-                    1f to Color(0xFF060A14)
+                    0f to Color(0xFF5AAEE8),
+                    0.5f to Color(0xFF2F72B5),
+                    1f to Color(0xFF17456F)
                 )
             )
             drawCircle(
                 brush = Brush.radialGradient(
                     colors = listOf(
-                        Color(0xFFF59E0B).copy(alpha = 0.20f * glow),
-                        Color(0xFFF59E0B).copy(alpha = 0.06f * glow),
+                        Color(0xFFFFE9A8).copy(alpha = 0.55f * glow),
+                        Color(0xFFF59E0B).copy(alpha = 0.18f * glow),
                         Color.Transparent
                     ),
                     center = Offset(w * 0.12f, h * 0.06f),
-                    radius = w * 0.34f
+                    radius = w * 0.38f
                 ),
-                radius = w * 0.34f,
+                radius = w * 0.38f,
                 center = Offset(w * 0.12f, h * 0.06f)
             )
         } else {
