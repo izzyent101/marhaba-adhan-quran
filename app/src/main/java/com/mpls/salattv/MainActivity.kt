@@ -100,7 +100,11 @@ private val QURAN_STATIONS = listOf(
     QuranStation("https://stream.radiojar.com/0tpy1h0kxtzuv", "Saudi Quran Radio"),
     QuranStation("https://backup.qurango.net/radio/maher", "Sheikh Maher Al-Muaiqly")
 )
-// At each prayer time, ALL audio is muted for this long (adhan + prayer), then Quran resumes.
+// Quran radio plays at this volume (10%); the adhan plays at full volume (100%).
+private const val QURAN_VOLUME = 0.1f
+// Egyptian adhan played at each prayer time, at 100% volume.
+private const val ADHAN_URL = "https://www.islamcan.com/audio/adhan/azan4.mp3"
+// At each prayer time, Quran audio is muted for this long (adhan + prayer), then resumes.
 private const val PRAYER_MUTE_WINDOW_MS = 15L * 60L * 1000L
 private const val UPDATE_CHECK_INTERVAL_MS = 6L * 60L * 60L * 1000L // every 6 hours
 
@@ -727,6 +731,7 @@ private fun StreamView(
             .setMediaSourceFactory(DefaultMediaSourceFactory(httpFactory))
             .build().apply {
                 setMediaItem(MediaItem.fromUri(QURAN_STATIONS[0].url))
+                volume = QURAN_VOLUME
                 playWhenReady = true
                 prepare()
             }
@@ -836,7 +841,28 @@ private fun StreamView(
     }
 
     // Quran follows the mute state; the video stays silent regardless.
-    LaunchedEffect(isQuranMuted) { quranPlayer.volume = if (isQuranMuted) 0f else 1f }
+    // Quran radio at 10% volume when playing; muted during prayer or by the user.
+    LaunchedEffect(isQuranMuted) { quranPlayer.volume = if (isQuranMuted) 0f else QURAN_VOLUME }
+
+    // Adhan at 100% volume when the prayer window starts; stops when it ends
+    // (or earlier, when the adhan audio itself finishes).
+    val adhanPlayer = remember { ExoPlayer.Builder(context).build() }
+    DisposableEffect(adhanPlayer) {
+        onDispose { adhanPlayer.release() }
+    }
+    LaunchedEffect(isPrayerMute) {
+        if (isPrayerMute) {
+            try {
+                adhanPlayer.setMediaItem(MediaItem.fromUri(ADHAN_URL))
+                adhanPlayer.volume = 1f
+                adhanPlayer.prepare()
+                adhanPlayer.playWhenReady = true
+                adhanPlayer.play()
+            } catch (_: Exception) {}
+        } else {
+            try { adhanPlayer.stop(); adhanPlayer.clearMediaItems() } catch (_: Exception) {}
+        }
+    }
 
     Box(
         modifier = Modifier.fillMaxSize()
@@ -922,8 +948,8 @@ private fun StreamView(
                         isPrayerMute -> {
                             SpeakerIcon(muted = true)
                             Column {
-                                Text("Sound Muted", color = Amber, fontSize = 17.sp, fontWeight = FontWeight.Bold, maxLines = 1)
-                                Text("Prayer / Adhan time", color = Color.White.copy(alpha = 0.75f), fontSize = 12.sp, maxLines = 1)
+                                Text("Adhan · Prayer Time", color = Amber, fontSize = 17.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                                Text("Quran paused — resumes after prayer", color = Color.White.copy(alpha = 0.75f), fontSize = 12.sp, maxLines = 1)
                             }
                         }
                         isQuranMuted -> {
