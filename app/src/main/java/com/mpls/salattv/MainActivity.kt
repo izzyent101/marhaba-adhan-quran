@@ -893,7 +893,11 @@ private fun StreamView(
     }
 
     // Quran radio at 10% volume when playing; muted during prayer or by the user.
-    LaunchedEffect(isQuranMuted) { quranPlayer.volume = if (isQuranMuted) 0f else QURAN_VOLUME }
+    // Quran mutes whenever the adhan is playing (real prayer OR test), exactly
+    // like prayer time; it resumes at QURAN_VOLUME when the adhan stops.
+    LaunchedEffect(isQuranMuted, adhanTest.value) {
+        quranPlayer.volume = if (isQuranMuted || adhanTest.value) 0f else QURAN_VOLUME
+    }
 
     val adhanActive = isPrayerMute || adhanTest.value
     LaunchedEffect(adhanActive) {
