@@ -166,15 +166,24 @@ fun MarhabaApp() {
     }
 
     // Prayer data: load now, reload just after midnight, forever.
+    // If a refresh fails, keep retrying every 10 minutes so the display never
+    // sits on yesterday's times for a whole day.
     LaunchedEffect(Unit) {
+        var lastFetchDay = -1
         while (true) {
             try {
                 prayerData = PrayerRepository.fetchPrayerData()
                 errorMsg = null
+                lastFetchDay = Calendar.getInstance().get(Calendar.DAY_OF_YEAR)
             } catch (e: Exception) {
                 if (prayerData == null) errorMsg = "Failed to load prayer times."
             }
-            val delayMs = if (prayerData == null) 60_000L else millisUntilAfterMidnight()
+            val fresh = lastFetchDay == Calendar.getInstance().get(Calendar.DAY_OF_YEAR)
+            val delayMs = when {
+                prayerData == null -> 60_000L
+                !fresh -> 10L * 60L * 1000L
+                else -> millisUntilAfterMidnight()
+            }
             kotlinx.coroutines.delay(delayMs)
         }
     }
@@ -217,7 +226,17 @@ fun MarhabaApp() {
     // Quran audio is muted if the user muted it, or during the prayer window.
     val isQuranMuted = !userSoundEnabled || isPrayerMute
 
+    // Day when between sunrise and sunset (Maghrib); night otherwise.
+    val isDaytime = data?.let { d ->
+        val cal = Calendar.getInstance().apply { time = now }
+        val nowMin = cal.get(Calendar.HOUR_OF_DAY) * 60 + cal.get(Calendar.MINUTE)
+        val sr = parseMinutes(d.timings["Sunrise"])
+        val ss = parseMinutes(d.timings["Maghrib"])
+        if (sr != null && ss != null) nowMin in sr until ss else true
+    } ?: true
+
     BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black)) {
+        SkyBackground(isDay = isDaytime, modifier = Modifier.matchParentSize())
         // Overscan-safe inset so nothing gets cropped by the TV's edge cropping.
         val hPad = maxWidth * 0.035f
         val vPad = maxHeight * 0.05f
@@ -817,11 +836,28 @@ private fun StreamView(
         livePlayer.addListener(liveListener)
         quranPlayer.addListener(quranListener)
         onDispose {
-            handler.removeCallbacks(watchdog)
+            handler.removeCallbacksAndMessages(null)
             livePlayer.removeListener(liveListener)
             quranPlayer.removeListener(quranListener)
             livePlayer.release()
             quranPlayer.release()
+        }
+    }
+
+    // Adhan player: 100% volume at prayer time, or when the on-screen Test
+    // button is pressed. Test auto-stops when the adhan audio finishes.
+    val adhanTest = remember { mutableStateOf(false) }
+    val adhanPlayer = remember { ExoPlayer.Builder(context).build() }
+    DisposableEffect(adhanPlayer) {
+        val listener = object : Player.Listener {
+            override fun onPlaybackStateChanged(state: Int) {
+                if (state == Player.STATE_ENDED) adhanTest.value = false
+            }
+        }
+        adhanPlayer.addListener(listener)
+        onDispose {
+            adhanPlayer.removeListener(listener)
+            adhanPlayer.release()
         }
     }
 
@@ -832,7 +868,7 @@ private fun StreamView(
                     livePlayer.playWhenReady = true; livePlayer.play()
                     quranPlayer.playWhenReady = true; quranPlayer.play()
                 }
-                Lifecycle.Event.ON_STOP -> { livePlayer.pause(); quranPlayer.pause() }
+                Lifecycle.Event.ON_STOP -> { livePlayer.pause(); quranPlayer.pause(); adhanPlayer.pause() }
                 else -> {}
             }
         }
@@ -840,18 +876,12 @@ private fun StreamView(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    // Quran follows the mute state; the video stays silent regardless.
     // Quran radio at 10% volume when playing; muted during prayer or by the user.
     LaunchedEffect(isQuranMuted) { quranPlayer.volume = if (isQuranMuted) 0f else QURAN_VOLUME }
 
-    // Adhan at 100% volume when the prayer window starts; stops when it ends
-    // (or earlier, when the adhan audio itself finishes).
-    val adhanPlayer = remember { ExoPlayer.Builder(context).build() }
-    DisposableEffect(adhanPlayer) {
-        onDispose { adhanPlayer.release() }
-    }
-    LaunchedEffect(isPrayerMute) {
-        if (isPrayerMute) {
+    val adhanActive = isPrayerMute || adhanTest.value
+    LaunchedEffect(adhanActive) {
+        if (adhanActive) {
             try {
                 adhanPlayer.setMediaItem(MediaItem.fromUri(ADHAN_URL))
                 adhanPlayer.volume = 1f
@@ -965,13 +995,30 @@ private fun StreamView(
                         }
                     }
                 }
-                // Mute toggle (controls the Quran audio).
-                Box(
-                    Modifier.size(40.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.08f))
-                        .border(1.dp, Color.White.copy(alpha = 0.12f), CircleShape)
-                        .clickable { onToggleMute() },
-                    contentAlignment = Alignment.Center
-                ) { SpeakerIcon(muted = isQuranMuted) }
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    // Test-adhan button: previews the adhan at full volume; tap again to stop.
+                    Box(
+                        Modifier.clip(RoundedCornerShape(18.dp))
+                            .background(if (adhanTest.value) Amber.copy(alpha = 0.9f) else Color.White.copy(alpha = 0.08f))
+                            .border(1.dp, Color.White.copy(alpha = 0.14f), RoundedCornerShape(18.dp))
+                            .clickable { adhanTest.value = !adhanTest.value }
+                            .padding(horizontal = 14.dp, vertical = 9.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            if (adhanTest.value) "Stop Test" else "Test Adhan",
+                            color = if (adhanTest.value) Color.Black else Color.White.copy(alpha = 0.85f),
+                            fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1
+                        )
+                    }
+                    // Mute toggle (controls the Quran audio).
+                    Box(
+                        Modifier.size(40.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.08f))
+                            .border(1.dp, Color.White.copy(alpha = 0.12f), CircleShape)
+                            .clickable { onToggleMute() },
+                        contentAlignment = Alignment.Center
+                    ) { SpeakerIcon(muted = isQuranMuted) }
+                }
             }
         }
     }
@@ -1077,6 +1124,90 @@ private fun millisUntilAfterMidnight(): Long {
         set(Calendar.SECOND, 30); set(Calendar.MILLISECOND, 0)
     }
     return (next.timeInMillis - now.timeInMillis).coerceAtLeast(60_000L)
+}
+
+// ---- Day / Night sky background ---------------------------------------------
+
+// Subtle ambient background: soft daylight glow with sunshine by day,
+// deep night sky with gently twinkling stars after sunset.
+@Composable
+private fun SkyBackground(isDay: Boolean, modifier: Modifier = Modifier) {
+    val tr = rememberInfiniteTransition(label = "sky")
+    val twinkle by tr.animateFloat(
+        initialValue = 0f, targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(5200, easing = LinearEasing), repeatMode = RepeatMode.Reverse),
+        label = "twinkle"
+    )
+    val glow by tr.animateFloat(
+        initialValue = 0.85f, targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(9000, easing = LinearEasing), repeatMode = RepeatMode.Reverse),
+        label = "glow"
+    )
+    Canvas(modifier = modifier) {
+        val w = size.width; val h = size.height
+        if (isDay) {
+            // Daytime: deep blue sky gradient with a soft sun glow top-left.
+            drawRect(
+                Brush.verticalGradient(
+                    0f to Color(0xFF14284A),
+                    0.55f to Color(0xFF0A1428),
+                    1f to Color(0xFF060A14)
+                )
+            )
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        Color(0xFFF59E0B).copy(alpha = 0.20f * glow),
+                        Color(0xFFF59E0B).copy(alpha = 0.06f * glow),
+                        Color.Transparent
+                    ),
+                    center = Offset(w * 0.12f, h * 0.06f),
+                    radius = w * 0.34f
+                ),
+                radius = w * 0.34f,
+                center = Offset(w * 0.12f, h * 0.06f)
+            )
+        } else {
+            // Night: near-black navy sky with stars and a soft moon glow.
+            drawRect(
+                Brush.verticalGradient(
+                    0f to Color(0xFF0A1024),
+                    0.5f to Color(0xFF060912),
+                    1f to Color(0xFF03050A)
+                )
+            )
+            // Moon glow (top-left, subtle).
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        Color(0xFFDDE6F5).copy(alpha = 0.10f * glow),
+                        Color.Transparent
+                    ),
+                    center = Offset(w * 0.12f, h * 0.08f),
+                    radius = w * 0.20f
+                ),
+                radius = w * 0.20f,
+                center = Offset(w * 0.12f, h * 0.08f)
+            )
+            // Stars: deterministic scatter, gentle alternating twinkle.
+            for (i in 0 until 64) {
+                val x = (((i * 73 + 13) % 97) / 97f) * w
+                val y = (((i * 41 + 7) % 89) / 89f) * h * 0.9f
+                val base = 0.25f + ((i * 29) % 40) / 100f
+                val a = if (i % 2 == 0) base * (0.5f + 0.5f * twinkle) else base * (1f - 0.5f * twinkle)
+                val r = if (i % 7 == 0) 1.6.dp.toPx() else 1.0.dp.toPx()
+                drawCircle(Color.White.copy(alpha = a.coerceIn(0.05f, 0.7f)), r, Offset(x, y))
+            }
+        }
+    }
+}
+
+private fun parseMinutes(hhmm: String?): Int? {
+    if (hhmm.isNullOrBlank()) return null
+    val p = hhmm.split(":")
+    val h = p.getOrNull(0)?.toIntOrNull() ?: return null
+    val m = p.getOrNull(1)?.toIntOrNull() ?: return null
+    return h * 60 + m
 }
 
 // Live HLS media item with a target live-edge offset so the player can re-sync to "now".
