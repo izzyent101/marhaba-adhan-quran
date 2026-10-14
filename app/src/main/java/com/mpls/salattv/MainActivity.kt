@@ -44,10 +44,14 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
@@ -90,19 +94,7 @@ private const val MECCA_HLS_PRIMARY =
     "https://cdn-globecast.akamaized.net/live/eds/saudi_quran/hls_roku/index.m3u8"
 private const val MECCA_HLS_FALLBACK =
     "http://m.live.net.sa:1935/live/quran/playlist.m3u8"
-// The 24/7 Quran audio = live Quran RADIO (mp3quran.net network), verified streams.
-// Multiple stations: if one drops, the app rotates to the next automatically.
-// The Makkah video itself is always muted.
-private data class QuranStation(val url: String, val reciter: String)
-
-private val QURAN_STATIONS = listOf(
-    QuranStation("https://backup.qurango.net/radio/abdulrahman_alsudaes", "Sheikh Abdul Rahman Al-Sudais"),
-    QuranStation("https://backup.qurango.net/radio/mishary_alafasi", "Sheikh Mishary Al-Afasy"),
-    QuranStation("https://stream.radiojar.com/0tpy1h0kxtzuv", "Saudi Quran Radio"),
-    QuranStation("https://backup.qurango.net/radio/maher", "Sheikh Maher Al-Muaiqly")
-)
-// Quran radio plays at this volume (5%); the adhan plays at full volume (100%)
-// plus a loudness boost, because the adhan source file is quietly mastered.
+// Quran-only recordings at 5%; the separate scheduled adhan plays at full volume.
 private const val QURAN_VOLUME = 0.05f
 private const val ADHAN_BOOST_MB = 600 // +6 dB extra boost (file is already loud-mastered)
 // HD adhan (Mishary Al-Afasy, loudness-mastered) played at each prayer, 100% volume.
@@ -114,13 +106,11 @@ private const val UPDATE_CHECK_INTERVAL_MS = 6L * 60L * 60L * 1000L // every 6 h
 
 // ---- Theme colors -----------------------------------------------------------
 
-private val Amber = Color(0xFFF59E0B)
-private val AmberLight = Color(0xFFFBBF24)
-private val CardBg = Color(0xFF1A1A1A)
-private val CardBg2 = Color(0xFF2A2A2A)
+private val Amber = Color(0xFFE6C784)
+private val AmberLight = Color(0xFFE6C784)
 
 private val ADHAN_PRAYERS = listOf("Fajr", "Dhuhr", "Asr", "Maghrib", "Isha")
-private val NEXT_PRAYER_CANDIDATES = listOf("Fajr", "Sunrise", "Dhuhr", "Asr", "Maghrib", "Isha")
+private val NEXT_PRAYER_CANDIDATES = ADHAN_PRAYERS
 
 class MainActivity : ComponentActivity() {
 
@@ -155,6 +145,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun MarhabaApp() {
     val context = LocalContext.current
+    val displayPreferences = rememberDisplayPreferences()
     var prayerData by remember { mutableStateOf<PrayerData?>(null) }
     var weather by remember { mutableStateOf<WeatherData?>(null) }
     var errorMsg by remember { mutableStateOf<String?>(null) }
@@ -240,7 +231,7 @@ fun MarhabaApp() {
     } ?: true
 
     BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black)) {
-        SkyBackground(isDay = isDaytime, modifier = Modifier.matchParentSize())
+        PremiumBackground(day = isDaytime, theme = displayPreferences.value.theme, modifier = Modifier.matchParentSize())
         // Overscan-safe inset so nothing gets cropped by the TV's edge cropping.
         val hPad = maxWidth * 0.035f
         val vPad = maxHeight * 0.05f
@@ -248,13 +239,23 @@ fun MarhabaApp() {
             when {
                 errorMsg != null && data == null -> ErrorScreen(errorMsg!!)
                 data == null -> LoadingScreen()
-                else -> MainScreen(
+                else -> PremiumScreen(
                     data = data,
                     weather = weather,
                     now = now,
                     isPrayerMute = isPrayerMute,
                     isQuranMuted = isQuranMuted,
-                    onToggleMute = { userSoundEnabled = !userSoundEnabled }
+                    onToggleMute = { userSoundEnabled = !userSoundEnabled },
+                    preferences = displayPreferences.value,
+                    onPreferences = { updated ->
+                        displayPreferences.value = updated
+                        context.getSharedPreferences("marhaba_display", 0).edit()
+                            .putString("theme", updated.theme)
+                            .putString("welcome", updated.welcome)
+                            .putBoolean("arabic", updated.arabic)
+                            .putBoolean("clock24", updated.clock24)
+                            .apply()
+                    }
                 )
             }
         }
@@ -281,286 +282,10 @@ private fun ErrorScreen(msg: String) {
     }
 }
 
-@Composable
-private fun MainScreen(
-    data: PrayerData,
-    weather: WeatherData?,
-    now: Date,
-    isPrayerMute: Boolean,
-    isQuranMuted: Boolean,
-    onToggleMute: () -> Unit
-) {
-    Column(Modifier.fillMaxSize()) {
-        Header(data = data, now = now, modifier = Modifier.fillMaxWidth().weight(0.19f))
-        Row(
-            modifier = Modifier.fillMaxWidth().weight(0.81f).padding(top = 14.dp),
-            horizontalArrangement = Arrangement.spacedBy(24.dp)
-        ) {
-            // Left: weather/sunrise glass pane + prayer times
-            Column(Modifier.weight(0.45f).fillMaxHeight()) {
-                GlassPane(weather = weather, sunrise = data.timings["Sunrise"], modifier = Modifier.fillMaxWidth().weight(1f))
-                Spacer(Modifier.height(12.dp))
-                Box(Modifier.fillMaxWidth().weight(3.4f)) {
-                    PrayerListView(data = data, now = now)
-                }
-            }
-            // Right: live stream
-            Box(Modifier.weight(0.55f).fillMaxHeight()) {
-                StreamView(
-                    isPrayerMute = isPrayerMute,
-                    isQuranMuted = isQuranMuted,
-                    onToggleMute = onToggleMute
-                )
-            }
-        }
-    }
-}
-
-// ---- Header (logo / holiday banner + clock) ---------------------------------
-
-@Composable
-private fun Header(data: PrayerData, now: Date, modifier: Modifier = Modifier) {
-    Row(
-        modifier = modifier,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        val holiday = PrayerRepository.getHolidayMessage(data.hijriMonthNumber, data.hijriDay)
-        // Logo (or holiday banner) centered within the left region of the header.
-        Box(Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.Center) {
-            if (holiday != null) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    Image(
-                        painter = painterResource(R.drawable.ic_lantern),
-                        contentDescription = null,
-                        modifier = Modifier.size(60.dp)
-                    )
-                    Column {
-                        Text(holiday.en, color = Amber, fontSize = 30.sp, fontWeight = FontWeight.Bold, maxLines = 1)
-                        Text(holiday.ar, color = AmberLight, fontSize = 24.sp, maxLines = 1)
-                    }
-                }
-            } else {
-                Image(
-                    painter = painterResource(R.drawable.marhaba_logo),
-                    contentDescription = "Marhaba Grill",
-                    contentScale = ContentScale.Fit,
-                    alignment = Alignment.Center,
-                    modifier = Modifier.fillMaxHeight().widthIn(max = 380.dp)
-                )
-            }
-        }
-
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(24.dp)) {
-            Column(horizontalAlignment = Alignment.End) {
-                Text(
-                    fmt(now, "h:mm a"),
-                    color = Amber, fontSize = 46.sp, fontWeight = FontWeight.Bold,
-                    maxLines = 1, softWrap = false, overflow = TextOverflow.Visible
-                )
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(fmt(now, "EEEE").uppercase(Locale.US), color = Color.White.copy(alpha = 0.6f), fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
-                    Text("|", color = Color.White.copy(alpha = 0.4f), fontSize = 12.sp)
-                    Text(fmtLocale(now, "EEEE", Locale("ar")), color = Color.White.copy(alpha = 0.4f), fontSize = 12.sp, maxLines = 1)
-                }
-            }
-            Box(Modifier.width(1.dp).height(52.dp).background(Color.White.copy(alpha = 0.1f)))
-            Column(horizontalAlignment = Alignment.End) {
-                Text(fmt(now, "MMMM d"), color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false)
-                Text("${data.hijriDay} ${data.hijriMonthAr}", color = Amber, fontSize = 17.sp, maxLines = 1, softWrap = false)
-            }
-        }
-    }
-}
-
-// ---- Weather + Sunrise glass pane -------------------------------------------
-
-@Composable
-private fun GlassPane(weather: WeatherData?, sunrise: String?, modifier: Modifier = Modifier) {
-    val tr = rememberInfiniteTransition(label = "glass")
-    // Slow diagonal glint that drifts across the pane like light on glass.
-    val shimmer by tr.animateFloat(
-        initialValue = 0f, targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(16000, easing = LinearEasing), repeatMode = RepeatMode.Restart),
-        label = "shimmer"
-    )
-    Box(
-        modifier = modifier
-            .clip(RoundedCornerShape(22.dp))
-            .background(
-                Brush.verticalGradient(
-                    listOf(Color.White.copy(alpha = 0.16f), Color.White.copy(alpha = 0.05f))
-                )
-            )
-            .border(1.dp, Color.White.copy(alpha = 0.24f), RoundedCornerShape(22.dp))
-    ) {
-        Row(
-            modifier = Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            // Weather block
-            Row(
-                modifier = Modifier.weight(1f),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                WeatherIcon(kind = weather?.kind ?: WeatherKind.CLOUD, isDay = weather?.isDay ?: true, modifier = Modifier.size(54.dp))
-                Column {
-                    Text(
-                        weather?.let { "${it.tempF}°F" } ?: "--°",
-                        color = Color.White, fontSize = 30.sp, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false
-                    )
-                    Text(
-                        weather?.condition ?: "Weather",
-                        color = Amber, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false
-                    )
-                    Text("Minneapolis", color = Color.White.copy(alpha = 0.45f), fontSize = 11.sp, maxLines = 1)
-                }
-            }
-
-            Box(Modifier.width(1.dp).fillMaxHeight().padding(vertical = 6.dp).background(Color.White.copy(alpha = 0.12f)))
-
-            // Sunrise block
-            Column(
-                modifier = Modifier.padding(start = 16.dp),
-                horizontalAlignment = Alignment.End
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    SunriseIcon(Modifier.size(26.dp))
-                    Text("Sunrise", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1)
-                    Text("الشروق", color = Color.White.copy(alpha = 0.4f), fontSize = 12.sp, maxLines = 1)
-                }
-                Text(to12Hour(sunrise), color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false)
-            }
-        }
-
-        // Glass overlays (drawn on top, non-interactive): a static top sheen + a slow moving glint.
-        Canvas(Modifier.matchParentSize()) {
-            val w = size.width; val h = size.height
-            // top sheen
-            drawRect(
-                Brush.verticalGradient(
-                    0f to Color.White.copy(alpha = 0.12f),
-                    0.45f to Color.Transparent,
-                    1f to Color.Transparent
-                )
-            )
-            // moving diagonal glisten
-            val bandW = w * 0.20f
-            val x = -bandW + shimmer * (w + 2f * bandW)
-            drawRect(
-                brush = Brush.linearGradient(
-                    colors = listOf(Color.Transparent, Color.White.copy(alpha = 0.09f), Color.Transparent),
-                    start = Offset(x, 0f),
-                    end = Offset(x + bandW, h)
-                ),
-                topLeft = Offset(x - bandW, 0f),
-                size = Size(bandW * 3f, h)
-            )
-        }
-    }
-}
-
-// ---- Prayer list ------------------------------------------------------------
-
-private data class PrayerRow(val key: String, val label: String, val ar: String, val id: Int)
-
-private val MAIN_PRAYERS = listOf(
-    PrayerRow("Fajr", "Fajr", "الفجر", 1),
-    PrayerRow("Dhuhr", "Dhuhr", "الظهر", 2),
-    PrayerRow("Asr", "Asr", "العصر", 3),
-    PrayerRow("Maghrib", "Maghrib", "المغرب", 4),
-    PrayerRow("Isha", "Isha", "العشاء", 5),
-)
-
-@Composable
-private fun PrayerListView(data: PrayerData, now: Date) {
-    val next = computeNextPrayer(data.timings, now)
-    val countdown = next?.let { formatCountdown(it.diffMs) } ?: ""
-
-    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        MAIN_PRAYERS.forEach { p ->
-            val isNext = next?.name == p.key
-            val time = to12Hour(data.timings[p.key])
-            if (isNext) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth().weight(2.7f)
-                        .clip(RoundedCornerShape(20.dp))
-                        .background(CardBg)
-                        .border(2.dp, Amber.copy(alpha = 0.8f), RoundedCornerShape(20.dp))
-                        .padding(horizontal = 18.dp, vertical = 12.dp),
-                    verticalArrangement = Arrangement.Center
-                ) {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            NumberBadge(p.id, big = true)
-                            Text(p.label, color = Amber, fontSize = 28.sp, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false)
-                            Text(p.ar, color = Color.White.copy(alpha = 0.5f), fontSize = 18.sp, maxLines = 1)
-                        }
-                        Box(
-                            Modifier.clip(RoundedCornerShape(4.dp))
-                                .border(1.dp, Color.White.copy(alpha = 0.2f), RoundedCornerShape(4.dp))
-                                .padding(horizontal = 8.dp, vertical = 2.dp)
-                        ) { Text("NEXT", color = Color.White.copy(alpha = 0.6f), fontSize = 10.sp, fontWeight = FontWeight.Bold, maxLines = 1) }
-                    }
-                    Spacer(Modifier.height(6.dp))
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.Bottom
-                    ) {
-                        if (countdown.isNotEmpty()) {
-                            Text("Starts in\n$countdown", color = Amber, fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 2)
-                        } else {
-                            Spacer(Modifier.width(1.dp))
-                        }
-                        Text(time, color = Color.White, fontSize = 40.sp, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false)
-                    }
-                }
-            } else {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth().weight(1f)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(CardBg)
-                        .border(1.dp, Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
-                        .padding(horizontal = 16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        NumberBadge(p.id, big = false)
-                        Text(p.label, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false)
-                        Text(p.ar, color = Color.White.copy(alpha = 0.3f), fontSize = 16.sp, maxLines = 1)
-                    }
-                    Text(time, color = Color.White.copy(alpha = 0.65f), fontSize = 22.sp, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false)
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun NumberBadge(n: Int, big: Boolean) {
-    Box(
-        modifier = Modifier
-            .size(if (big) 32.dp else 24.dp)
-            .clip(RoundedCornerShape(if (big) 8.dp else 6.dp))
-            .background(if (big) Amber else CardBg2),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            n.toString(),
-            color = if (big) Color.Black else Color.White.copy(alpha = 0.4f),
-            fontWeight = FontWeight.Bold, fontSize = if (big) 16.sp else 12.sp, maxLines = 1
-        )
-    }
-}
-
 // ---- Weather icons (animated) ----------------------------------------------
 
 @Composable
-private fun WeatherIcon(kind: WeatherKind, isDay: Boolean, modifier: Modifier = Modifier) {
+internal fun WeatherIcon(kind: WeatherKind, isDay: Boolean, modifier: Modifier = Modifier) {
     val transition = rememberInfiniteTransition(label = "weather")
     // Very subtle, slow motion.
     val rot by transition.animateFloat(
@@ -576,11 +301,11 @@ private fun WeatherIcon(kind: WeatherKind, isDay: Boolean, modifier: Modifier = 
         animationSpec = infiniteRepeatable(tween(4400, easing = LinearEasing), repeatMode = RepeatMode.Reverse), label = "flash"
     )
 
-    val sun = Color(0xFFFBBF24)
+    val sun = Color(0xFFE6C784)
     val cloud = Color(0xFFD1D5DB)
     val rainC = Color(0xFF60A5FA)
     val snowC = Color(0xFFE5E7EB)
-    val bolt = Color(0xFFFBBF24)
+    val bolt = Color(0xFFE6C784)
 
     Canvas(modifier = modifier) {
         val w = size.width; val h = size.height
@@ -601,7 +326,14 @@ private fun WeatherIcon(kind: WeatherKind, isDay: Boolean, modifier: Modifier = 
             drawRect(c, topLeft = Offset(cx - s, cy), size = Size(s * 2f, s * 0.6f))
         }
         when (kind) {
-            WeatherKind.CLEAR -> drawSun(w * 0.5f, h * 0.5f, w * 0.20f)
+            WeatherKind.CLEAR -> if (isDay) {
+                drawSun(w * 0.5f, h * 0.5f, w * 0.20f)
+            } else {
+                drawArc(Color(0xFFE6C784), 45f, 270f, false,
+                    topLeft = Offset(w * .24f, h * .18f), size = Size(w * .5f, h * .6f),
+                    style = androidx.compose.ui.graphics.drawscope.Stroke(w * .10f, cap = StrokeCap.Round))
+                drawCircle(Color.White, w * .035f, Offset(w * .78f, h * .23f))
+            }
             WeatherKind.PARTLY -> {
                 drawSun(w * 0.36f, h * 0.36f, w * 0.15f)
                 drawCloud(w * 0.58f, h * 0.62f, w * 0.22f, cloud)
@@ -651,7 +383,7 @@ private fun WeatherIcon(kind: WeatherKind, isDay: Boolean, modifier: Modifier = 
 }
 
 @Composable
-private fun SunriseIcon(modifier: Modifier = Modifier) {
+internal fun SunriseIcon(modifier: Modifier = Modifier) {
     val c = Amber
     val transition = rememberInfiniteTransition(label = "sunrise")
     val rise by transition.animateFloat(
@@ -700,7 +432,7 @@ private fun SunriseIcon(modifier: Modifier = Modifier) {
 
 @OptIn(UnstableApi::class)
 @Composable
-private fun StreamView(
+internal fun StreamView(
     isPrayerMute: Boolean,
     isQuranMuted: Boolean,
     onToggleMute: () -> Unit
@@ -738,9 +470,9 @@ private fun StreamView(
             }
     }
 
-    // 24/7 Quran radio. Muted during prayer or if user mutes; rotates stations on failure.
-    val stationIndex = remember { intArrayOf(0) }
-    val currentReciter = remember { mutableStateOf(QURAN_STATIONS[0].reciter) }
+    // A finite, repeating Quran-only playlist: no radio stations or broadcast adhan.
+    val playbackPrefs = remember { context.getSharedPreferences("quran_playback", 0) }
+    val quranFailures = remember { intArrayOf(0) }
     val quranPos = remember { longArrayOf(0L) }
     val quranProgressTs = remember { longArrayOf(0L) }
 
@@ -753,7 +485,10 @@ private fun StreamView(
         ExoPlayer.Builder(context)
             .setMediaSourceFactory(DefaultMediaSourceFactory(httpFactory))
             .build().apply {
-                setMediaItem(MediaItem.fromUri(QURAN_STATIONS[0].url))
+                setMediaItems(QuranPlaylist.urls.map { MediaItem.fromUri(it) },
+                    playbackPrefs.getInt("index", 0).coerceIn(0, 113),
+                    playbackPrefs.getLong("position", 0L).coerceAtLeast(0L))
+                repeatMode = Player.REPEAT_MODE_ALL
                 volume = QURAN_VOLUME
                 playWhenReady = true
                 prepare()
@@ -761,7 +496,16 @@ private fun StreamView(
     }
 
 
-    // Self-healing reconnect for both streams.
+    // Save progress without writing on every clock tick.
+    LaunchedEffect(quranPlayer) {
+        while (true) {
+            kotlinx.coroutines.delay(30_000L)
+            playbackPrefs.edit().putInt("index", quranPlayer.currentMediaItemIndex.coerceAtLeast(0))
+                .putLong("position", quranPlayer.currentPosition.coerceAtLeast(0L)).apply()
+        }
+    }
+
+    // Self-healing reconnect for video and recordings.
     DisposableEffect(livePlayer, quranPlayer) {
         // Reload the live stream at the live edge, alternating source after repeated trouble.
         fun recoverLive(switchUrl: Boolean) {
@@ -783,23 +527,24 @@ private fun StreamView(
             }
         }
 
-        // Rotate to the next Quran radio station and reconnect.
-        fun recoverQuran(switchStation: Boolean) {
+        // Retry the recording; after repeated failures move to another Quran file.
+        // No live audio fallback is permitted.
+        fun recoverQuran() {
             try {
-                if (switchStation) {
-                    stationIndex[0] = (stationIndex[0] + 1) % QURAN_STATIONS.size
-                    currentReciter.value = QURAN_STATIONS[stationIndex[0]].reciter
+                val shouldPlay = quranPlayer.playWhenReady
+                quranFailures[0]++
+                if (quranFailures[0] >= 3) {
+                    quranPlayer.seekTo((quranPlayer.currentMediaItemIndex + 1) % QuranPlaylist.urls.size, 0L)
+                    quranFailures[0] = 0
                 }
-                quranPlayer.stop(); quranPlayer.clearMediaItems()
-                quranPlayer.setMediaItem(MediaItem.fromUri(QURAN_STATIONS[stationIndex[0]].url))
-                quranPlayer.prepare(); quranPlayer.playWhenReady = true
-                quranPos[0] = 0L
+                quranPlayer.prepare()
+                quranPlayer.playWhenReady = shouldPlay
+                quranPos[0] = quranPlayer.currentPosition
                 quranProgressTs[0] = SystemClock.elapsedRealtime()
             } catch (_: Exception) {}
         }
 
-        // Watchdog: if video or radio stops advancing or goes idle/stuck buffering,
-        // reconnect automatically (even when no error is thrown).
+        // Recover only active playback; prayer pauses must remain paused.
         val watchdog = object : Runnable {
             override fun run() {
                 try {
@@ -821,9 +566,9 @@ private fun StreamView(
                         val qp = quranPlayer.currentPosition
                         if (quranProgressTs[0] == 0L) quranProgressTs[0] = nowT
                         if (qs == Player.STATE_READY && qp > quranPos[0] + 250L) {
-                            quranPos[0] = qp; quranProgressTs[0] = nowT
+                            quranPos[0] = qp; quranProgressTs[0] = nowT; quranFailures[0] = 0
                         } else if (qs == Player.STATE_IDLE || (nowT - quranProgressTs[0]) > 20000L) {
-                            recoverQuran(switchStation = true)
+                            recoverQuran()
                         }
                     }
                 } catch (_: Exception) {}
@@ -833,8 +578,12 @@ private fun StreamView(
         handler.postDelayed(watchdog, 6000)
 
         val quranListener = object : Player.Listener {
+            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                quranPos[0] = 0L
+                quranProgressTs[0] = SystemClock.elapsedRealtime()
+            }
             override fun onPlayerError(error: PlaybackException) {
-                handler.postDelayed({ recoverQuran(switchStation = true) }, 3000)
+                handler.postDelayed({ recoverQuran() }, 3000)
             }
         }
         livePlayer.addListener(liveListener)
@@ -844,6 +593,8 @@ private fun StreamView(
             livePlayer.removeListener(liveListener)
             quranPlayer.removeListener(quranListener)
             livePlayer.release()
+            playbackPrefs.edit().putInt("index", quranPlayer.currentMediaItemIndex.coerceAtLeast(0))
+                .putLong("position", quranPlayer.currentPosition.coerceAtLeast(0L)).apply()
             quranPlayer.release()
         }
     }
@@ -851,8 +602,10 @@ private fun StreamView(
     // Adhan player: 100% volume at prayer time, or when the on-screen Test
     // button is pressed. Test auto-stops when the adhan audio finishes.
     val adhanTest = remember { mutableStateOf(false) }
+    var testFocused by remember { mutableStateOf(false) }
+    var muteFocused by remember { mutableStateOf(false) }
     val adhanPlayer = remember { ExoPlayer.Builder(context).build() }
-    // Loudness booster attached to the adhan's audio session (+12 dB).
+    // Loudness booster attached to the adhan's audio session (+6 dB).
     val adhanBooster = remember { arrayOfNulls<LoudnessEnhancer>(1) }
     DisposableEffect(adhanPlayer) {
         val listener = object : Player.Listener {
@@ -877,12 +630,13 @@ private fun StreamView(
         }
     }
 
+    val quranShouldPlay by rememberUpdatedState(!isQuranMuted && !adhanTest.value)
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_START, Lifecycle.Event.ON_RESUME -> {
                     livePlayer.playWhenReady = true; livePlayer.play()
-                    quranPlayer.playWhenReady = true; quranPlayer.play()
+                    quranPlayer.playWhenReady = quranShouldPlay
                 }
                 Lifecycle.Event.ON_STOP -> { livePlayer.pause(); quranPlayer.pause(); adhanPlayer.pause() }
                 else -> {}
@@ -892,11 +646,13 @@ private fun StreamView(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    // Quran radio at 10% volume when playing; muted during prayer or by the user.
-    // Quran mutes whenever the adhan is playing (real prayer OR test), exactly
-    // like prayer time; it resumes at QURAN_VOLUME when the adhan stops.
+    // Pause the recording for prayer/test/user mute, then resume at the same position.
     LaunchedEffect(isQuranMuted, adhanTest.value) {
-        quranPlayer.volume = if (isQuranMuted || adhanTest.value) 0f else QURAN_VOLUME
+        val paused = isQuranMuted || adhanTest.value
+        quranPlayer.volume = if (paused) 0f else QURAN_VOLUME
+        quranPlayer.playWhenReady = !paused && lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+        quranProgressTs[0] = SystemClock.elapsedRealtime()
+        quranPos[0] = quranPlayer.currentPosition
     }
 
     val adhanActive = isPrayerMute || adhanTest.value
@@ -927,7 +683,7 @@ private fun StreamView(
                     player = livePlayer
                     useController = false
                     setShutterBackgroundColor(AndroidColor.BLACK)
-                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
                     setKeepContentOnPlayerReset(true)
                 }
             }
@@ -995,11 +751,11 @@ private fun StreamView(
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     when {
-                        isPrayerMute -> {
+                        isPrayerMute || adhanTest.value -> {
                             SpeakerIcon(muted = true)
                             Column {
-                                Text("Adhan · Prayer Time", color = Amber, fontSize = 17.sp, fontWeight = FontWeight.Bold, maxLines = 1)
-                                Text("Quran paused — resumes after prayer", color = Color.White.copy(alpha = 0.75f), fontSize = 12.sp, maxLines = 1)
+                                Text(if (adhanTest.value) "Adhan · Test" else "Adhan · Prayer Time", color = Amber, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                                Text(if (adhanTest.value) "Quran resumes when test ends" else "Quran resumes after prayer", color = Color.White.copy(alpha = 0.75f), fontSize = 12.sp, maxLines = 1)
                             }
                         }
                         isQuranMuted -> {
@@ -1009,8 +765,8 @@ private fun StreamView(
                         else -> {
                             EqualizerIcon()
                             Column {
-                                Text("Now Playing · Holy Qur'an", color = Amber, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
-                                Text(currentReciter.value, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                                Text("Holy Qur'an · Recitation", color = Amber, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                                Text(QuranPlaylist.reciter, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             }
                         }
                     }
@@ -1020,7 +776,8 @@ private fun StreamView(
                     Box(
                         Modifier.clip(RoundedCornerShape(18.dp))
                             .background(if (adhanTest.value) Amber.copy(alpha = 0.9f) else Color.White.copy(alpha = 0.08f))
-                            .border(1.dp, Color.White.copy(alpha = 0.14f), RoundedCornerShape(18.dp))
+                            .border(2.dp, if (testFocused) Amber else Color.White.copy(alpha = 0.14f), RoundedCornerShape(18.dp))
+                            .onFocusChanged { testFocused = it.isFocused }
                             .clickable { adhanTest.value = !adhanTest.value }
                             .padding(horizontal = 14.dp, vertical = 9.dp),
                         contentAlignment = Alignment.Center
@@ -1034,7 +791,9 @@ private fun StreamView(
                     // Mute toggle (controls the Quran audio).
                     Box(
                         Modifier.size(40.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.08f))
-                            .border(1.dp, Color.White.copy(alpha = 0.12f), CircleShape)
+                            .border(2.dp, if (muteFocused) Amber else Color.White.copy(alpha = 0.12f), CircleShape)
+                            .semantics { contentDescription = if (isQuranMuted) "Unmute Quran" else "Mute Quran" }
+                            .onFocusChanged { muteFocused = it.isFocused }
                             .clickable { onToggleMute() },
                         contentAlignment = Alignment.Center
                     ) { SpeakerIcon(muted = isQuranMuted) }
@@ -1085,9 +844,9 @@ private fun SpeakerIcon(muted: Boolean) {
 
 // ---- Helpers ----------------------------------------------------------------
 
-private data class NextPrayer(val name: String, val diffMs: Long)
+internal data class NextPrayer(val name: String, val diffMs: Long)
 
-private fun computeNextPrayer(timings: Map<String, String>, now: Date): NextPrayer? {
+internal fun computeNextPrayer(timings: Map<String, String>, now: Date): NextPrayer? {
     var best: NextPrayer? = null
     for (name in NEXT_PRAYER_CANDIDATES) {
         val t = timings[name] ?: continue
@@ -1119,13 +878,13 @@ private fun computeNextPrayer(timings: Map<String, String>, now: Date): NextPray
     return best
 }
 
-private fun formatCountdown(ms: Long): String {
+internal fun formatCountdown(ms: Long): String {
     val h = ms / (1000 * 60 * 60)
     val m = (ms % (1000 * 60 * 60)) / (1000 * 60)
     return "${h}h ${m}m"
 }
 
-private fun to12Hour(time24: String?): String {
+internal fun to12Hour(time24: String?): String {
     if (time24.isNullOrBlank()) return "--:--"
     val parts = time24.split(":")
     val h = parts.getOrNull(0)?.toIntOrNull() ?: return "--:--"
@@ -1144,82 +903,6 @@ private fun millisUntilAfterMidnight(): Long {
         set(Calendar.SECOND, 30); set(Calendar.MILLISECOND, 0)
     }
     return (next.timeInMillis - now.timeInMillis).coerceAtLeast(60_000L)
-}
-
-// ---- Day / Night sky background ---------------------------------------------
-
-// Subtle ambient background: soft daylight glow with sunshine by day,
-// deep night sky with gently twinkling stars after sunset.
-@Composable
-private fun SkyBackground(isDay: Boolean, modifier: Modifier = Modifier) {
-    val tr = rememberInfiniteTransition(label = "sky")
-    val twinkle by tr.animateFloat(
-        initialValue = 0f, targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(5200, easing = LinearEasing), repeatMode = RepeatMode.Reverse),
-        label = "twinkle"
-    )
-    val glow by tr.animateFloat(
-        initialValue = 0.85f, targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(9000, easing = LinearEasing), repeatMode = RepeatMode.Reverse),
-        label = "glow"
-    )
-    Canvas(modifier = modifier) {
-        val w = size.width; val h = size.height
-        if (isDay) {
-            // Daytime: bright sky-blue gradient with a warm sun glow top-left.
-            drawRect(
-                Brush.verticalGradient(
-                    0f to Color(0xFF5AAEE8),
-                    0.5f to Color(0xFF2F72B5),
-                    1f to Color(0xFF17456F)
-                )
-            )
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(
-                        Color(0xFFFFE9A8).copy(alpha = 0.55f * glow),
-                        Color(0xFFF59E0B).copy(alpha = 0.18f * glow),
-                        Color.Transparent
-                    ),
-                    center = Offset(w * 0.12f, h * 0.06f),
-                    radius = w * 0.38f
-                ),
-                radius = w * 0.38f,
-                center = Offset(w * 0.12f, h * 0.06f)
-            )
-        } else {
-            // Night: near-black navy sky with stars and a soft moon glow.
-            drawRect(
-                Brush.verticalGradient(
-                    0f to Color(0xFF0A1024),
-                    0.5f to Color(0xFF060912),
-                    1f to Color(0xFF03050A)
-                )
-            )
-            // Moon glow (top-left, subtle).
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(
-                        Color(0xFFDDE6F5).copy(alpha = 0.10f * glow),
-                        Color.Transparent
-                    ),
-                    center = Offset(w * 0.12f, h * 0.08f),
-                    radius = w * 0.20f
-                ),
-                radius = w * 0.20f,
-                center = Offset(w * 0.12f, h * 0.08f)
-            )
-            // Stars: deterministic scatter, gentle alternating twinkle.
-            for (i in 0 until 64) {
-                val x = (((i * 73 + 13) % 97) / 97f) * w
-                val y = (((i * 41 + 7) % 89) / 89f) * h * 0.9f
-                val base = 0.25f + ((i * 29) % 40) / 100f
-                val a = if (i % 2 == 0) base * (0.5f + 0.5f * twinkle) else base * (1f - 0.5f * twinkle)
-                val r = if (i % 7 == 0) 1.6.dp.toPx() else 1.0.dp.toPx()
-                drawCircle(Color.White.copy(alpha = a.coerceIn(0.05f, 0.7f)), r, Offset(x, y))
-            }
-        }
-    }
 }
 
 private fun parseMinutes(hhmm: String?): Int? {
