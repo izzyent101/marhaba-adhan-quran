@@ -6,6 +6,7 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -64,75 +65,6 @@ internal fun rememberDisplayPreferences(): MutableState<DisplayPreferences> {
 }
 
 @Composable
-internal fun PremiumBackground(day: Boolean, modifier: Modifier) {
-    val transition = rememberInfiniteTransition(label = "sky ambience")
-    val shimmer = transition.animateFloat(.45f, 1f,
-        infiniteRepeatable(tween(9000, easing = LinearEasing), RepeatMode.Reverse), label = "starlight")
-    Canvas(modifier) {
-        val w = size.width; val h = size.height
-        drawRect(Brush.verticalGradient(if (day) listOf(Color(0xFF306D91), Color(0xFF174659), Color(0xFF081D28))
-            else listOf(Color(0xFF0D1B39), Color(0xFF0B1628), Color(0xFF050E19))))
-        val celestial = Offset(w * .68f, h * .10f)
-        drawCircle(Brush.radialGradient(listOf(
-            (if (day) Color(0xFFFFD793) else Color(0xFFBCD8FF)).copy(alpha = if (day) .22f else .12f),
-            Color.Transparent), center = celestial, radius = w * .32f), w * .32f, celestial)
-        if (day) {
-            drawCircle(Brush.radialGradient(listOf(Color(0xFFFFF1BF), Color(0xFFEAC77C))), 19.dp.toPx(), celestial)
-            for (i in 0 until 12) {
-                val a = i * Math.PI / 6
-                val inner = 25.dp.toPx(); val outer = 30.dp.toPx()
-                drawLine(Gold.copy(alpha = .35f),
-                    celestial + Offset(cos(a).toFloat() * inner, sin(a).toFloat() * inner),
-                    celestial + Offset(cos(a).toFloat() * outer, sin(a).toFloat() * outer), 1.dp.toPx())
-            }
-            // Layered cloud wisps, drawn once per frame as vector paths.
-            for (i in 0..2) {
-                val cloud = Path().apply {
-                    moveTo(w * (.40f + i * .12f), h * (.09f + i * .025f))
-                    cubicTo(w * (.47f + i * .12f), h * (.04f + i * .025f),
-                        w * (.51f + i * .12f), h * (.14f + i * .025f),
-                        w * (.59f + i * .12f), h * (.10f + i * .025f))
-                }
-                drawPath(cloud, Cream.copy(alpha = .06f), style = Stroke(5.dp.toPx()))
-            }
-        } else {
-            val r = 23.dp.toPx()
-            val moon = Path().apply {
-                moveTo(celestial.x + r * .45f, celestial.y - r)
-                cubicTo(celestial.x - r * 1.35f, celestial.y - r,
-                    celestial.x - r * 1.35f, celestial.y + r, celestial.x + r * .45f, celestial.y + r)
-                cubicTo(celestial.x - r * .55f, celestial.y + r * .5f,
-                    celestial.x - r * .55f, celestial.y - r * .5f, celestial.x + r * .45f, celestial.y - r)
-                close()
-            }
-            drawPath(moon, Color(0xFFDFE8F6))
-            for (i in 0 until 48) {
-                val alpha = if (i % 3 == 0) .4f * shimmer.value else .22f
-                drawCircle(Cream.copy(alpha = alpha), (if (i % 7 == 0) 1.2f else .65f).dp.toPx(),
-                    Offset(w * ((i * 37 % 101) / 101f), h * ((i * 19 % 73) / 100f)))
-            }
-        }
-        // Islamic geometry adds texture without competing with the live image or type.
-        val step = 84.dp.toPx()
-        for (row in 0..(h / step).toInt()) {
-            for (col in 0..(w / step).toInt()) {
-                val cx = col * step; val cy = row * step
-                val star = Path()
-                for (point in 0 until 16) {
-                    val angle = point * Math.PI / 8
-                    val radius = step * if (point % 2 == 0) .32f else .16f
-                    val x = cx + cos(angle).toFloat() * radius
-                    val y = cy + sin(angle).toFloat() * radius
-                    if (point == 0) star.moveTo(x, y) else star.lineTo(x, y)
-                }
-                star.close()
-                drawPath(star, Gold.copy(alpha = .035f), style = Stroke(1.dp.toPx()))
-            }
-        }
-    }
-}
-
-@Composable
 internal fun PremiumScreen(
     data: PrayerData, weather: WeatherData?, now: Date,
     isPrayerMute: Boolean, isQuranMuted: Boolean, onToggleMute: () -> Unit,
@@ -183,7 +115,6 @@ internal fun PremiumScreen(
             }
             Column(Modifier.weight(.40f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Box(Modifier.fillMaxWidth().weight(1.15f).panel(highlight = true)) {
-                    ArchArtwork(Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(140.dp))
                     Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.Center) {
                         Text(if (isPrayerMute) "A MOMENT FOR PRAYER" else "NEXT PRAYER", color = Gold,
                             fontSize = 10.sp, letterSpacing = 2.sp, fontWeight = FontWeight.Bold)
@@ -221,7 +152,7 @@ internal fun PremiumScreen(
             Text("MARHABA GRILL", color = Gold, fontSize = 10.sp, letterSpacing = 2.sp, fontWeight = FontWeight.Bold)
             Text("  /  A space to gather. A moment to reflect.", color = Muted, fontSize = 11.sp, modifier = Modifier.weight(1f))
             TextButton(onClick = { settingsOpen = true }, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)) {
-                Text("Customize display", color = Gold, fontSize = 11.sp)
+                Text(if (UpdateChecker.needsPermission) "Allow app updates" else "Display & updates", color = Gold, fontSize = 11.sp)
             }
         }
     }
@@ -236,36 +167,26 @@ private fun Modifier.panel(highlight: Boolean = false): Modifier = clip(RoundedC
     .border(1.dp, Gold.copy(alpha = if (highlight) .5f else .16f), RoundedCornerShape(18.dp))
 
 @Composable
-private fun ArchArtwork(modifier: Modifier) {
-    Canvas(modifier) {
-        val w = size.width; val h = size.height
-        for (i in 0..3) {
-            val inset = w * (.08f + .10f * i)
-            val p = Path().apply {
-                moveTo(inset, h)
-                lineTo(inset, h * .54f)
-                cubicTo(inset, h * .30f, w * .5f, h * .18f, w * .5f, h * .08f)
-                cubicTo(w * .5f, h * .18f, w - inset, h * .30f, w - inset, h * .54f)
-                lineTo(w - inset, h)
-            }
-            drawPath(p, Gold.copy(alpha = .10f), style = Stroke(1.dp.toPx()))
-        }
-        drawCircle(Gold.copy(alpha = .14f), w * .1f, Offset(w * .5f, h * .42f))
-    }
-}
-
-@Composable
 private fun DisplaySettings(initial: DisplayPreferences, onDismiss: () -> Unit, onSave: (DisplayPreferences) -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var draft by remember { mutableStateOf(initial) }
     MaterialTheme(colorScheme = darkColorScheme(primary = Gold, onPrimary = Ink, surface = Ink, onSurface = Cream)) {
         AlertDialog(onDismissRequest = onDismiss, title = { Text("Make it Marhaba") },
             text = {
                 Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("Display preferences are saved on this TV.", color = Muted)
+                    Text("Preferences are saved on this TV.", color = Muted)
                     OutlinedTextField(value = draft.welcome, onValueChange = { draft = draft.copy(welcome = it.take(48)) },
                         label = { Text("Welcome message") }, singleLine = true)
+                    Text("App version ${BuildConfig.VERSION_CODE}", color = Gold)
+                    Text(UpdateChecker.status, color = Muted, fontSize = 13.sp)
+                    OutlinedButton(enabled = !UpdateChecker.busy, onClick = {
+                        if (UpdateChecker.needsPermission) UpdateChecker.openInstallPermission(context)
+                        else scope.launch { UpdateChecker.checkAndInstall(context) }
+                    }) { Text(if (UpdateChecker.needsPermission) "Allow app updates" else "Check for update") }
+                    Text("Quran volume: 5%  ·  Adhan volume: 100%", color = Gold, fontSize = 12.sp)
                     Text("Automatic sky · Minneapolis", color = Gold)
-                    Text("Daylight from sunrise to sunset. Moonlight and stars after sunset. Changes automatically throughout the year.", color = Muted, fontSize = 13.sp)
+                    Text("Real cloud footage by day. Independently twinkling stars at night. Gradual dawn and dusk follow Minneapolis sunrise and sunset.", color = Muted, fontSize = 13.sp)
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text("Arabic prayer names", Modifier.weight(1f))
                         Switch(draft.arabic, { draft = draft.copy(arabic = it) })
@@ -274,6 +195,9 @@ private fun DisplaySettings(initial: DisplayPreferences, onDismiss: () -> Unit, 
                         Text("24-hour clock", Modifier.weight(1f))
                         Switch(draft.clock24, { draft = draft.copy(clock24 = it) })
                     }
+                    Text("Cloud footage: Editor · CC BY 3.0. Looped, slowed and color blended for this display.", color = Muted, fontSize = 10.sp)
+                    TextButton(onClick = { context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW,
+                        android.net.Uri.parse("https://commons.wikimedia.org/wiki/File:Clouds_(time_lapse).webm"))) }) { Text("Footage source & license", fontSize = 11.sp) }
                 }
             },
             confirmButton = { TextButton(onClick = { onSave(draft.copy(welcome = draft.welcome.trim().ifBlank { "Welcome to Marhaba Grill" })) }) { Text("Save display") } },

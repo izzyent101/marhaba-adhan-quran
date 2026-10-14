@@ -96,14 +96,15 @@ private const val MECCA_HLS_PRIMARY =
 private const val MECCA_HLS_FALLBACK =
     "http://m.live.net.sa:1935/live/quran/playlist.m3u8"
 // Quran-only recordings at 5%; the separate scheduled adhan plays at full volume.
-private const val QURAN_VOLUME = 0.05f
+internal const val QURAN_VOLUME = 0.05f
+internal const val ADHAN_VOLUME = 1.0f
 private const val ADHAN_BOOST_MB = 600 // +6 dB extra boost (file is already loud-mastered)
 // HD adhan (Mishary Al-Afasy, loudness-mastered) played at each prayer, 100% volume.
 private const val ADHAN_URL =
     "https://github.com/izzyent101/marhaba-adhan-quran/releases/download/quran-audio/adhan.mp3"
 // At each prayer time, Quran audio is muted for this long (adhan + prayer), then resumes.
 private const val PRAYER_MUTE_WINDOW_MS = 15L * 60L * 1000L
-private const val UPDATE_CHECK_INTERVAL_MS = 6L * 60L * 60L * 1000L // every 6 hours
+private const val UPDATE_CHECK_INTERVAL_MS = 15L * 60L * 1000L // every 15 minutes
 
 // ---- Theme colors -----------------------------------------------------------
 
@@ -133,6 +134,11 @@ class MainActivity : ComponentActivity() {
         window.decorView.postDelayed({
             try { insetsController.hide(WindowInsetsCompat.Type.systemBars()) } catch (_: Exception) {}
         }, 250)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        UpdateChecker.resumePendingInstall(this)
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -196,7 +202,7 @@ fun MarhabaApp() {
     LaunchedEffect(Unit) {
         while (true) {
             kotlinx.coroutines.delay(15_000L) // small delay after launch
-            UpdateChecker.check()?.let { UpdateChecker.downloadAndInstall(context, it) }
+            UpdateChecker.checkAndInstall(context)
             kotlinx.coroutines.delay(UPDATE_CHECK_INTERVAL_MS)
         }
     }
@@ -223,10 +229,9 @@ fun MarhabaApp() {
     val isQuranMuted = !userSoundEnabled || isPrayerMute
 
     // Day when between sunrise and sunset (Maghrib); night otherwise.
-    val isDaytime = isRestaurantDaytime(data?.timings.orEmpty(), now)
 
     BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black)) {
-        PremiumBackground(day = isDaytime, modifier = Modifier.matchParentSize())
+        NaturalSky(light = skyLight(data?.timings.orEmpty(), now), modifier = Modifier.matchParentSize())
         // Overscan-safe inset so nothing gets cropped by the TV's edge cropping.
         val hPad = maxWidth * 0.035f
         val vPad = maxHeight * 0.05f
@@ -654,7 +659,7 @@ internal fun StreamView(
         if (adhanActive) {
             try {
                 adhanPlayer.setMediaItem(MediaItem.fromUri(ADHAN_URL))
-                adhanPlayer.volume = 1f
+                adhanPlayer.volume = ADHAN_VOLUME
                 adhanPlayer.prepare()
                 adhanPlayer.playWhenReady = true
                 adhanPlayer.play()
