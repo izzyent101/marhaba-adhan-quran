@@ -1,5 +1,11 @@
 package com.mpls.salattv
 
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -29,6 +35,7 @@ import androidx.compose.ui.unit.sp
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.TimeZone
 import kotlin.math.cos
 import kotlin.math.sin
 
@@ -38,7 +45,6 @@ private val Cream = Color(0xFFF5F0E5)
 private val Muted = Color(0xFFABC0BD)
 
 internal data class DisplayPreferences(
-    val theme: String = "Automatic",
     val welcome: String = "Welcome to Marhaba Grill",
     val arabic: Boolean = true,
     val clock24: Boolean = false
@@ -50,7 +56,6 @@ internal fun rememberDisplayPreferences(): MutableState<DisplayPreferences> {
     return remember {
         val saved = context.getSharedPreferences("marhaba_display", 0)
         mutableStateOf(DisplayPreferences(
-            theme = saved.getString("theme", "Automatic") ?: "Automatic",
             welcome = saved.getString("welcome", "Welcome to Marhaba Grill") ?: "Welcome to Marhaba Grill",
             arabic = saved.getBoolean("arabic", true),
             clock24 = saved.getBoolean("clock24", false)
@@ -59,19 +64,58 @@ internal fun rememberDisplayPreferences(): MutableState<DisplayPreferences> {
 }
 
 @Composable
-internal fun PremiumBackground(day: Boolean, theme: String, modifier: Modifier) {
-    val daylight = theme == "Automatic" && day
-    val sapphire = theme == "Midnight blue"
+internal fun PremiumBackground(day: Boolean, modifier: Modifier) {
+    val transition = rememberInfiniteTransition(label = "sky ambience")
+    val shimmer = transition.animateFloat(.45f, 1f,
+        infiniteRepeatable(tween(9000, easing = LinearEasing), RepeatMode.Reverse), label = "starlight")
     Canvas(modifier) {
-        val top = if (daylight) Color(0xFF205C62) else if (sapphire) Color(0xFF142B50) else Color(0xFF102E30)
-        drawRect(Brush.verticalGradient(listOf(top, Ink, Color(0xFF050F14))))
-        drawCircle(Brush.radialGradient(listOf(Gold.copy(alpha = if (daylight) .16f else .06f), Color.Transparent),
-            center = Offset(size.width * .1f, 0f), radius = size.width * .6f),
-            radius = size.width * .6f, center = Offset(size.width * .1f, 0f))
-        // Eight-point stars repeat as quiet, resolution-independent architectural detail.
+        val w = size.width; val h = size.height
+        drawRect(Brush.verticalGradient(if (day) listOf(Color(0xFF306D91), Color(0xFF174659), Color(0xFF081D28))
+            else listOf(Color(0xFF0D1B39), Color(0xFF0B1628), Color(0xFF050E19))))
+        val celestial = Offset(w * .68f, h * .10f)
+        drawCircle(Brush.radialGradient(listOf(
+            (if (day) Color(0xFFFFD793) else Color(0xFFBCD8FF)).copy(alpha = if (day) .22f else .12f),
+            Color.Transparent), center = celestial, radius = w * .32f), w * .32f, celestial)
+        if (day) {
+            drawCircle(Brush.radialGradient(listOf(Color(0xFFFFF1BF), Color(0xFFEAC77C))), 19.dp.toPx(), celestial)
+            for (i in 0 until 12) {
+                val a = i * Math.PI / 6
+                val inner = 25.dp.toPx(); val outer = 30.dp.toPx()
+                drawLine(Gold.copy(alpha = .35f),
+                    celestial + Offset(cos(a).toFloat() * inner, sin(a).toFloat() * inner),
+                    celestial + Offset(cos(a).toFloat() * outer, sin(a).toFloat() * outer), 1.dp.toPx())
+            }
+            // Layered cloud wisps, drawn once per frame as vector paths.
+            for (i in 0..2) {
+                val cloud = Path().apply {
+                    moveTo(w * (.40f + i * .12f), h * (.09f + i * .025f))
+                    cubicTo(w * (.47f + i * .12f), h * (.04f + i * .025f),
+                        w * (.51f + i * .12f), h * (.14f + i * .025f),
+                        w * (.59f + i * .12f), h * (.10f + i * .025f))
+                }
+                drawPath(cloud, Cream.copy(alpha = .06f), style = Stroke(5.dp.toPx()))
+            }
+        } else {
+            val r = 23.dp.toPx()
+            val moon = Path().apply {
+                moveTo(celestial.x + r * .45f, celestial.y - r)
+                cubicTo(celestial.x - r * 1.35f, celestial.y - r,
+                    celestial.x - r * 1.35f, celestial.y + r, celestial.x + r * .45f, celestial.y + r)
+                cubicTo(celestial.x - r * .55f, celestial.y + r * .5f,
+                    celestial.x - r * .55f, celestial.y - r * .5f, celestial.x + r * .45f, celestial.y - r)
+                close()
+            }
+            drawPath(moon, Color(0xFFDFE8F6))
+            for (i in 0 until 48) {
+                val alpha = if (i % 3 == 0) .4f * shimmer.value else .22f
+                drawCircle(Cream.copy(alpha = alpha), (if (i % 7 == 0) 1.2f else .65f).dp.toPx(),
+                    Offset(w * ((i * 37 % 101) / 101f), h * ((i * 19 % 73) / 100f)))
+            }
+        }
+        // Islamic geometry adds texture without competing with the live image or type.
         val step = 84.dp.toPx()
-        for (row in 0..(size.height / step).toInt()) {
-            for (col in 0..(size.width / step).toInt()) {
+        for (row in 0..(h / step).toInt()) {
+            for (col in 0..(w / step).toInt()) {
                 val cx = col * step; val cy = row * step
                 val star = Path()
                 for (point in 0 until 16) {
@@ -82,13 +126,7 @@ internal fun PremiumBackground(day: Boolean, theme: String, modifier: Modifier) 
                     if (point == 0) star.moveTo(x, y) else star.lineTo(x, y)
                 }
                 star.close()
-                drawPath(star, Gold.copy(alpha = .045f), style = Stroke(1.dp.toPx()))
-            }
-        }
-        if (!daylight) {
-            for (i in 0 until 28) {
-                drawCircle(Cream.copy(alpha = .22f), 0.8.dp.toPx(),
-                    Offset(size.width * ((i * 37 % 101) / 101f), size.height * ((i * 19 % 73) / 100f)))
+                drawPath(star, Gold.copy(alpha = .035f), style = Stroke(1.dp.toPx()))
             }
         }
     }
@@ -115,9 +153,9 @@ internal fun PremiumScreen(
                     color = Gold, fontSize = 10.sp, letterSpacing = 2.sp, maxLines = 1)
             }
             Column(horizontalAlignment = Alignment.End) {
-                Text(SimpleDateFormat(if (preferences.clock24) "HH:mm" else "h:mm a", Locale.US).format(now),
+                Text(SimpleDateFormat(if (preferences.clock24) "HH:mm" else "h:mm a", Locale.US).apply { timeZone = TimeZone.getTimeZone("America/Chicago") }.format(now),
                     color = Cream, fontSize = 36.sp, fontWeight = FontWeight.Light, maxLines = 1)
-                Text(SimpleDateFormat("EEE, MMM d", Locale.US).format(now) + "  ·  ${data.hijriDay} ${data.hijriMonthEn}",
+                Text(SimpleDateFormat("EEE, MMM d", Locale.US).apply { timeZone = TimeZone.getTimeZone("America/Chicago") }.format(now) + "  ·  ${data.hijriDay} ${data.hijriMonthEn}",
                     color = Muted, fontSize = 11.sp, maxLines = 1)
             }
         }
@@ -226,12 +264,8 @@ private fun DisplaySettings(initial: DisplayPreferences, onDismiss: () -> Unit, 
                     Text("Display preferences are saved on this TV.", color = Muted)
                     OutlinedTextField(value = draft.welcome, onValueChange = { draft = draft.copy(welcome = it.take(48)) },
                         label = { Text("Welcome message") }, singleLine = true)
-                    Text("Atmosphere", color = Gold)
-                    listOf("Automatic", "Emerald", "Midnight blue").forEach { theme ->
-                        OutlinedButton(onClick = { draft = draft.copy(theme = theme) }, modifier = Modifier.fillMaxWidth()) {
-                            Text((if (draft.theme == theme) "✓  " else "") + theme)
-                        }
-                    }
+                    Text("Automatic sky · Minneapolis", color = Gold)
+                    Text("Daylight from sunrise to sunset. Moonlight and stars after sunset. Changes automatically throughout the year.", color = Muted, fontSize = 13.sp)
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text("Arabic prayer names", Modifier.weight(1f))
                         Switch(draft.arabic, { draft = draft.copy(arabic = it) })

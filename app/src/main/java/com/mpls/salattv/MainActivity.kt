@@ -87,6 +87,7 @@ import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
+import java.util.TimeZone
 
 // ---- Configuration ----------------------------------------------------------
 
@@ -169,11 +170,11 @@ fun MarhabaApp() {
             try {
                 prayerData = PrayerRepository.fetchPrayerData()
                 errorMsg = null
-                lastFetchDay = Calendar.getInstance().get(Calendar.DAY_OF_YEAR)
+                lastFetchDay = Calendar.getInstance(TimeZone.getTimeZone("America/Chicago")).get(Calendar.DAY_OF_YEAR)
             } catch (e: Exception) {
                 if (prayerData == null) errorMsg = "Failed to load prayer times."
             }
-            val fresh = lastFetchDay == Calendar.getInstance().get(Calendar.DAY_OF_YEAR)
+            val fresh = lastFetchDay == Calendar.getInstance(TimeZone.getTimeZone("America/Chicago")).get(Calendar.DAY_OF_YEAR)
             val delayMs = when {
                 prayerData == null -> 60_000L
                 !fresh -> 10L * 60L * 1000L
@@ -205,7 +206,7 @@ fun MarhabaApp() {
     LaunchedEffect(now, data) {
         if (data == null) return@LaunchedEffect
         if (now.time >= muteUntil) {
-            val cal = Calendar.getInstance().apply { time = now }
+            val cal = Calendar.getInstance(TimeZone.getTimeZone("America/Chicago")).apply { time = now }
             val cur = String.format(
                 Locale.US, "%02d:%02d",
                 cal.get(Calendar.HOUR_OF_DAY), cal.get(Calendar.MINUTE)
@@ -222,16 +223,10 @@ fun MarhabaApp() {
     val isQuranMuted = !userSoundEnabled || isPrayerMute
 
     // Day when between sunrise and sunset (Maghrib); night otherwise.
-    val isDaytime = data?.let { d ->
-        val cal = Calendar.getInstance().apply { time = now }
-        val nowMin = cal.get(Calendar.HOUR_OF_DAY) * 60 + cal.get(Calendar.MINUTE)
-        val sr = parseMinutes(d.timings["Sunrise"])
-        val ss = parseMinutes(d.timings["Maghrib"])
-        if (sr != null && ss != null) nowMin in sr until ss else true
-    } ?: true
+    val isDaytime = isRestaurantDaytime(data?.timings.orEmpty(), now)
 
     BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black)) {
-        PremiumBackground(day = isDaytime, theme = displayPreferences.value.theme, modifier = Modifier.matchParentSize())
+        PremiumBackground(day = isDaytime, modifier = Modifier.matchParentSize())
         // Overscan-safe inset so nothing gets cropped by the TV's edge cropping.
         val hPad = maxWidth * 0.035f
         val vPad = maxHeight * 0.05f
@@ -250,7 +245,6 @@ fun MarhabaApp() {
                     onPreferences = { updated ->
                         displayPreferences.value = updated
                         context.getSharedPreferences("marhaba_display", 0).edit()
-                            .putString("theme", updated.theme)
                             .putString("welcome", updated.welcome)
                             .putBoolean("arabic", updated.arabic)
                             .putBoolean("clock24", updated.clock24)
@@ -854,7 +848,7 @@ internal fun computeNextPrayer(timings: Map<String, String>, now: Date): NextPra
         if (parts.size < 2) continue
         val h = parts[0].toIntOrNull() ?: continue
         val m = parts[1].toIntOrNull() ?: continue
-        val cal = Calendar.getInstance().apply {
+        val cal = Calendar.getInstance(TimeZone.getTimeZone("America/Chicago")).apply {
             time = now
             set(Calendar.HOUR_OF_DAY, h); set(Calendar.MINUTE, m)
             set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
@@ -867,7 +861,7 @@ internal fun computeNextPrayer(timings: Map<String, String>, now: Date): NextPra
         val h = fajr?.getOrNull(0)?.toIntOrNull()
         val m = fajr?.getOrNull(1)?.toIntOrNull()
         if (h != null && m != null) {
-            val cal = Calendar.getInstance().apply {
+            val cal = Calendar.getInstance(TimeZone.getTimeZone("America/Chicago")).apply {
                 time = now; add(Calendar.DAY_OF_YEAR, 1)
                 set(Calendar.HOUR_OF_DAY, h); set(Calendar.MINUTE, m)
                 set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
@@ -896,8 +890,8 @@ internal fun to12Hour(time24: String?): String {
 }
 
 private fun millisUntilAfterMidnight(): Long {
-    val now = Calendar.getInstance()
-    val next = Calendar.getInstance().apply {
+    val now = Calendar.getInstance(TimeZone.getTimeZone("America/Chicago"))
+    val next = Calendar.getInstance(TimeZone.getTimeZone("America/Chicago")).apply {
         add(Calendar.DAY_OF_YEAR, 1)
         set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0)
         set(Calendar.SECOND, 30); set(Calendar.MILLISECOND, 0)
@@ -926,3 +920,12 @@ private fun liveMediaItem(url: String): MediaItem =
 
 private fun fmt(date: Date, pattern: String): String = SimpleDateFormat(pattern, Locale.US).format(date)
 private fun fmtLocale(date: Date, pattern: String, locale: Locale): String = SimpleDateFormat(pattern, locale).format(date)
+
+// Always use the restaurant's timezone, even if a TV box has a different system zone.
+internal fun isRestaurantDaytime(timings: Map<String, String>, now: Date): Boolean {
+    val cal = Calendar.getInstance(TimeZone.getTimeZone("America/Chicago")).apply { time = now }
+    val minutes = cal.get(Calendar.HOUR_OF_DAY) * 60 + cal.get(Calendar.MINUTE)
+    val sunrise = parseMinutes(timings["Sunrise"]) ?: 6 * 60
+    val sunset = parseMinutes(timings["Maghrib"]) ?: 18 * 60
+    return minutes in sunrise until sunset
+}

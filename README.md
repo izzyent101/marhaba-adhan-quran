@@ -5,7 +5,8 @@ Native Kotlin / Jetpack Compose wall display for Marhaba Grill, Minneapolis 5540
 ## October 2026 display upgrade
 
 - Marhaba branding, gold geometric artwork, architectural prayer card, larger Makkah view, bilingual prayer schedule, local weather and sunrise.
-- **Customize display** saves the welcome message, automatic day/night or emerald/midnight-blue atmosphere, Arabic prayer labels, and 12/24-hour clock on each TV. Cancel discards edits.
+- **Customize display** saves the welcome message, Arabic prayer labels, and 12/24-hour clock on each TV. Cancel discards edits.
+- The sky always changes automatically at Minneapolis sunrise and sunset: blue daylight with sun/cloud artwork, navy moonlight with gently twinkling stars. Clock, prayer scheduling and midnight refresh use America/Chicago, independent of the TV box timezone.
 - Makkah video remains silent and preserves the complete video frame.
 - Quran audio uses 114 individual [Mishary Al-Afasy Quran recordings](https://www.mp3quran.net/eng/afs/downloads), played sequentially and repeated. **There are no live radio stations or radio fallbacks.** Recording availability still requires an internet connection.
 - Quran plays at 5%, pauses during the app's scheduled adhan and 15-minute prayer window, and resumes from its position. Playback progress is saved every 30 seconds and when the player is disposed.
