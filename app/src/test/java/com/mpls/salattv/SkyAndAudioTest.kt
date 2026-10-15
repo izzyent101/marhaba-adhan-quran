@@ -24,6 +24,18 @@ class SkyAndAudioTest {
         assertEquals(0f, skyLight(times, at(19, 0)).daylight, .0001f)
         assertEquals(0f, skyLight(times, at(3, 0)).daylight, .0001f)
     }
+    @Test fun sunTraversesTheSkyBetweenLocalSunriseAndSunset() {
+        val dawn = skyLight(times, at(7, 0))
+        val noon = skyLight(times, at(12, 30))
+        val dusk = skyLight(times, at(18, 0))
+        assertEquals(0f, dawn.solarProgress, .001f)
+        assertEquals(.5f, noon.solarProgress, .001f)
+        assertEquals(1f, dusk.solarProgress, .001f)
+        assertFalse(dawn.evening)
+        assertTrue(dusk.evening)
+        assertEquals(1f, noon.sunVisibility, .001f)
+        assertEquals(0f, skyLight(times, at(3, 0)).sunVisibility, .001f)
+    }
     @Test fun mandatedAudioLevelsStaySeparate() {
         assertEquals(.05f, QURAN_VOLUME, 0f)
         assertEquals(1f, ADHAN_VOLUME, 0f)

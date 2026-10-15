@@ -149,8 +149,9 @@ internal fun PremiumScreen(
             }
         }
         Row(Modifier.fillMaxWidth().height(32.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("MARHABA GRILL", color = Gold, fontSize = 10.sp, letterSpacing = 2.sp, fontWeight = FontWeight.Bold)
-            Text("  /  A space to gather. A moment to reflect.", color = Muted, fontSize = 11.sp, modifier = Modifier.weight(1f))
+            Text("A space to gather. A moment to reflect.", color = Cream, fontSize = 11.sp)
+            Text("مساحةٌ للّقاء، ولحظةٌ للتأمّل", color = Gold, fontSize = 13.sp,
+                modifier = Modifier.weight(1f).padding(start = 20.dp), maxLines = 1)
             TextButton(onClick = { settingsOpen = true }, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)) {
                 Text(if (UpdateChecker.needsPermission) "Allow app updates" else "Display & updates", color = Gold, fontSize = 11.sp)
             }

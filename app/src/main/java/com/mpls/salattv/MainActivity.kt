@@ -682,7 +682,7 @@ internal fun StreamView(
                     player = livePlayer
                     useController = false
                     setShutterBackgroundColor(AndroidColor.BLACK)
-                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
                     setKeepContentOnPlayerReset(true)
                 }
             }

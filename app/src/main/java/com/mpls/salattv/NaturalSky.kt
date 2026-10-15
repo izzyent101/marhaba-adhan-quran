@@ -24,9 +24,17 @@ import java.util.Calendar
 import java.util.Date
 import java.util.TimeZone
 import kotlin.math.sin
+import kotlin.math.PI
+import androidx.compose.ui.graphics.lerp
 import kotlin.random.Random
 
-internal data class SkyLight(val daylight: Float, val twilight: Float)
+internal data class SkyLight(
+    val daylight: Float,
+    val twilight: Float,
+    val solarProgress: Float = .5f,
+    val sunVisibility: Float = 0f,
+    val evening: Boolean = false
+)
 
 internal fun skyLight(timings: Map<String, String>, now: Date): SkyLight {
     fun minutes(value: String?, fallback: Float): Float {
@@ -45,7 +53,11 @@ internal fun skyLight(timings: Map<String, String>, now: Date): SkyLight {
     val sunset = minutes(timings["Maghrib"], 1080f)
     // A continuous 75-minute atmospheric transition, not a theme toggle.
     val light = minOf(smooth((time - sunrise + 45) / 75), 1 - smooth((time - sunset + 30) / 75))
-    return SkyLight(light, 4 * light * (1 - light))
+    val progress = (time - sunrise) / (sunset - sunrise).coerceAtLeast(1f)
+    val sunVisibility = minOf(smooth((time - sunrise + 8) / 16),
+        1 - smooth((time - sunset + 8) / 16))
+    return SkyLight(light, 4 * light * (1 - light), progress, sunVisibility,
+        time > (sunrise + sunset) / 2)
 }
 
 private data class NaturalStar(val x: Float, val y: Float, val radius: Float,
@@ -116,9 +128,36 @@ internal fun NaturalSky(light: SkyLight, modifier: Modifier = Modifier) {
             clouds.setVideoTextureView(this)
         } }, update = { it.alpha = light.daylight }, modifier = Modifier.fillMaxSize())
         Canvas(Modifier.fillMaxSize()) {
-            // Warm scattered light only during dawn/dusk; no drawn celestial symbols.
-            drawRect(Brush.verticalGradient(listOf(Color(0xFF6A4D7C).copy(alpha = light.twilight * .18f),
-                Color(0xFFEF9462).copy(alpha = light.twilight * .38f))))
+            // Continuous solar arc: eastern horizon at sunrise, overhead at noon,
+            // western horizon at sunset. No accelerated, repeating sunrise animation.
+            val progress = light.solarProgress.coerceIn(0f, 1f)
+            val elevation = sin(progress * PI).toFloat()
+            val sun = Offset(size.width * (.06f + .88f * progress),
+                size.height * (.91f - .85f * elevation))
+            val warmth = (1f - elevation).coerceIn(0f, 1f)
+            val horizon = if (light.evening) Color(0xFFF77C42) else Color(0xFFFFBD86)
+            val upper = if (light.evening) Color(0xFF423956) else Color(0xFF777CA5)
+            drawRect(Brush.verticalGradient(listOf(
+                upper.copy(alpha = light.twilight * .48f),
+                horizon.copy(alpha = light.twilight * .12f),
+                horizon.copy(alpha = light.twilight * .65f))))
+            val glow = Offset(sun.x, size.height * .91f)
+            drawRect(Brush.radialGradient(listOf(
+                horizon.copy(alpha = light.twilight * .38f), Color.Transparent),
+                center = glow, radius = size.width * .6f))
+            if (light.sunVisibility > 0f) {
+                val sunColor = lerp(Color(0xFFFFF8E1), Color(0xFFFFB567), warmth)
+                drawCircle(Brush.radialGradient(listOf(
+                    sunColor.copy(alpha = .36f * light.sunVisibility),
+                    sunColor.copy(alpha = .07f * light.sunVisibility), Color.Transparent),
+                    center = sun, radius = size.width * .16f),
+                    radius = size.width * .16f, center = sun)
+                drawCircle(Brush.radialGradient(listOf(
+                    Color(0xFFFFFBEF).copy(alpha = .94f * light.sunVisibility),
+                    sunColor.copy(alpha = .82f * light.sunVisibility), Color.Transparent),
+                    center = sun, radius = size.width * .012f),
+                    radius = size.width * .012f, center = sun)
+            }
             // Keep the header readable while retaining the natural cloud detail.
             drawRect(Brush.verticalGradient(listOf(Color.Black.copy(alpha = .30f * light.daylight),
                 Color.Black.copy(alpha = .08f * light.daylight), Color.Black.copy(alpha = .32f * light.daylight))))
