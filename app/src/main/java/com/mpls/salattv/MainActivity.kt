@@ -92,9 +92,9 @@ import java.util.TimeZone
 // ---- Configuration ----------------------------------------------------------
 
 private const val MECCA_HLS_PRIMARY =
-    "https://cdn-globecast.akamaized.net/live/eds/saudi_quran/hls_roku/index.m3u8"
-private const val MECCA_HLS_FALLBACK =
     "http://m.live.net.sa:1935/live/quran/playlist.m3u8"
+private const val MECCA_HLS_FALLBACK =
+    "https://cdn-globecast.akamaized.net/live/eds/saudi_quran/hls_roku/index.m3u8"
 // Quran-only recordings at 5%; the separate scheduled adhan plays at full volume.
 internal const val QURAN_VOLUME = 0.05f
 internal const val ADHAN_VOLUME = 1.0f
@@ -460,9 +460,11 @@ internal fun StreamView(
             .build().apply {
                 repeatMode = Player.REPEAT_MODE_ALL
                 volume = 0f // video is permanently muted
-                // Full adaptive bitrate: picks the highest quality the feed offers
-                // AND the connection can sustain (1080p/720p when possible), and
-                // drops down instead of freezing when bandwidth dips.
+                // Verified 1280x720 primary; lower-resolution source is failover only.
+                trackSelectionParameters = trackSelectionParameters.buildUpon()
+                    .setMaxVideoSize(1920, 1080)
+                    .setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_AUDIO, true)
+                    .build()
                 playWhenReady = true
                 setMediaItem(liveMediaItem(urls[0]))
                 prepare()
@@ -678,7 +680,7 @@ internal fun StreamView(
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = { ctx ->
-                PlayerView(ctx).apply {
+                (android.view.LayoutInflater.from(ctx).inflate(R.layout.live_video, null) as PlayerView).apply {
                     player = livePlayer
                     useController = false
                     setShutterBackgroundColor(AndroidColor.BLACK)
@@ -701,12 +703,6 @@ internal fun StreamView(
         }
 
         // Bottom status bar — frosted glass, now-playing + prayer/adhan pause status.
-        val barTr = rememberInfiniteTransition(label = "barglass")
-        val barShimmer by barTr.animateFloat(
-            initialValue = 0f, targetValue = 1f,
-            animationSpec = infiniteRepeatable(tween(17000, easing = LinearEasing), repeatMode = RepeatMode.Restart),
-            label = "barShimmer"
-        )
         Box(
             Modifier.align(Alignment.BottomCenter).fillMaxWidth()
                 .background(
@@ -715,7 +711,7 @@ internal fun StreamView(
                     )
                 )
         ) {
-            // Glass sheen + slow glisten + top highlight (behind the content, non-interactive).
+            // Fixed glass sheen avoids an unnecessary continuously moving overlay.
             Canvas(Modifier.matchParentSize()) {
                 val w = size.width; val h = size.height
                 drawRect(Color.White.copy(alpha = 0.16f), topLeft = Offset(0f, 0f), size = Size(w, 1.5.dp.toPx()))
@@ -726,17 +722,7 @@ internal fun StreamView(
                         1f to Color.Transparent
                     )
                 )
-                val bandW = w * 0.16f
-                val x = -bandW + barShimmer * (w + 2f * bandW)
-                drawRect(
-                    brush = Brush.linearGradient(
-                        colors = listOf(Color.Transparent, Color.White.copy(alpha = 0.06f), Color.Transparent),
-                        start = Offset(x, 0f),
-                        end = Offset(x + bandW, h)
-                    ),
-                    topLeft = Offset(x - bandW, 0f),
-                    size = Size(bandW * 3f, h)
-                )
+
             }
 
             Row(

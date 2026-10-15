@@ -36,6 +36,15 @@ class SkyAndAudioTest {
         assertEquals(1f, noon.sunVisibility, .001f)
         assertEquals(0f, skyLight(times, at(3, 0)).sunVisibility, .001f)
     }
+    @Test fun skyHasNoAbruptDayNightBoundaryAnywhereInTheDay() {
+        val samples = (0..1440).map { skyLight(times, at(0, it)) }
+        assertTrue(samples.all { it.daylight in 0f..1f && it.twilight in 0f..1f })
+        assertTrue(samples.zipWithNext().all { (a, b) ->
+            kotlin.math.abs(a.daylight - b.daylight) < .021f &&
+                kotlin.math.abs(a.twilight - b.twilight) < .08f
+        })
+        assertEquals(samples.first().daylight, samples.last().daylight, 0f)
+    }
     @Test fun mandatedAudioLevelsStaySeparate() {
         assertEquals(.05f, QURAN_VOLUME, 0f)
         assertEquals(1f, ADHAN_VOLUME, 0f)

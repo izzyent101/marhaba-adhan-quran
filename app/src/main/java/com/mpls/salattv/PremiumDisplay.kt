@@ -163,9 +163,18 @@ internal fun PremiumScreen(
     }
 }
 
-private fun Modifier.panel(highlight: Boolean = false): Modifier = clip(RoundedCornerShape(18.dp))
-    .background(Brush.linearGradient(if (highlight) listOf(Color(0xFF254B48), Color(0xFF122D31)) else listOf(Color(0xFF11292E), Color(0xFF0B2026))))
-    .border(1.dp, Gold.copy(alpha = if (highlight) .5f else .16f), RoundedCornerShape(18.dp))
+// Translucent glass tint and fixed edge reflections keep the sky visible without
+// a costly full-screen backdrop blur on TV hardware.
+private fun Modifier.panel(highlight: Boolean = false): Modifier = clip(RoundedCornerShape(22.dp))
+    .background(Brush.linearGradient(listOf(
+        Color(0xFF35494E).copy(alpha = if (highlight) .68f else .58f),
+        Color(0xFF10242C).copy(alpha = .78f),
+        Color(0xFF142830).copy(alpha = .65f))))
+    .background(Brush.verticalGradient(listOf(Color.White.copy(alpha = .10f),
+        Color.Transparent, Color.White.copy(alpha = .025f))))
+    .border(1.dp, Brush.linearGradient(listOf(
+        Color.White.copy(alpha = if (highlight) .55f else .35f),
+        Color.White.copy(alpha = .06f), Color.White.copy(alpha = .22f))), RoundedCornerShape(22.dp))
 
 @Composable
 private fun DisplaySettings(initial: DisplayPreferences, onDismiss: () -> Unit, onSave: (DisplayPreferences) -> Unit) {
