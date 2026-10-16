@@ -67,10 +67,11 @@ internal fun rememberDisplayPreferences(): MutableState<DisplayPreferences> {
 @Composable
 internal fun PremiumScreen(
     data: PrayerData, weather: WeatherData?, now: Date,
-    isPrayerMute: Boolean, isQuranMuted: Boolean, onToggleMute: () -> Unit,
+    isPrayerWindow: Boolean,
     preferences: DisplayPreferences, onPreferences: (DisplayPreferences) -> Unit
 ) {
     var settingsOpen by remember { mutableStateOf(false) }
+    var testingAdhan by remember { mutableStateOf(false) }
     val next = computeNextPrayer(data.timings, now)
     val holiday = PrayerRepository.getHolidayMessage(data.hijriMonthNumber, data.hijriDay)
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -81,7 +82,7 @@ internal fun PremiumScreen(
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(holiday?.en ?: preferences.welcome, color = Cream, fontSize = 20.sp,
                     fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(if (holiday != null && preferences.arabic) holiday.ar else "MINNEAPOLIS  ·  PRAYER & QURAN",
+                Text(if (holiday != null && preferences.arabic) holiday.ar else "MINNEAPOLIS  ·  MAKKAH LIVE",
                     color = Gold, fontSize = 10.sp, letterSpacing = 2.sp, maxLines = 1)
             }
             Column(horizontalAlignment = Alignment.End) {
@@ -94,7 +95,7 @@ internal fun PremiumScreen(
         Row(Modifier.weight(1f).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(18.dp)) {
             Column(Modifier.weight(.60f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Box(Modifier.weight(1f)) {
-                    StreamView(isPrayerMute, isQuranMuted, onToggleMute)
+                    StreamView(isPrayerWindow, testingAdhan, onAdhanTestFinished = { testingAdhan = false })
                 }
                 Row(Modifier.fillMaxWidth().height(60.dp).panel().padding(horizontal = 16.dp),
                     verticalAlignment = Alignment.CenterVertically) {
@@ -108,20 +109,20 @@ internal fun PremiumScreen(
                     SunriseIcon(Modifier.size(32.dp))
                     Spacer(Modifier.width(10.dp))
                     Column(horizontalAlignment = Alignment.End) {
-                        Text("SUNRISE", color = Muted, fontSize = 9.sp, letterSpacing = 1.sp)
-                        Text(to12Hour(data.timings["Sunrise"]), color = Gold, fontSize = 15.sp)
+                        Text(if (isRestaurantDaytime(data.timings, now)) "SUNSET" else "SUNRISE", color = Muted, fontSize = 9.sp, letterSpacing = 1.sp)
+                        Text(to12Hour(data.timings[if (isRestaurantDaytime(data.timings, now)) "Maghrib" else "Sunrise"]), color = Gold, fontSize = 15.sp)
                     }
                 }
             }
             Column(Modifier.weight(.40f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Box(Modifier.fillMaxWidth().weight(1.15f).panel(highlight = true)) {
                     Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.Center) {
-                        Text(if (isPrayerMute) "A MOMENT FOR PRAYER" else "NEXT PRAYER", color = Gold,
+                        Text(if (isPrayerWindow) "A MOMENT FOR PRAYER" else "NEXT PRAYER", color = Gold,
                             fontSize = 10.sp, letterSpacing = 2.sp, fontWeight = FontWeight.Bold)
                         Spacer(Modifier.height(5.dp))
-                        Text(if (isPrayerMute) "Prayer time" else next?.name ?: "Updating…", color = Cream,
+                        Text(if (isPrayerWindow) "Prayer time" else next?.name ?: "Updating…", color = Cream,
                             fontSize = 30.sp, fontWeight = FontWeight.Medium, maxLines = 1)
-                        Text(if (isPrayerMute) "Quran resumes after prayer" else next?.let { "In ${formatCountdown(it.diffMs)}  ·  ${to12Hour(data.timings[it.name])}" } ?: "Waiting for prayer times",
+                        Text(if (isPrayerWindow) "Take a moment to reflect · وقت الصلاة" else next?.let { "In ${formatCountdown(it.diffMs)}  ·  ${to12Hour(data.timings[it.name])}" } ?: "Waiting for prayer times",
                             color = Gold, fontSize = 13.sp, maxLines = 1)
                     }
                 }
@@ -157,7 +158,8 @@ internal fun PremiumScreen(
             }
         }
     }
-    if (settingsOpen) DisplaySettings(preferences, onDismiss = { settingsOpen = false }) {
+    if (settingsOpen) DisplaySettings(preferences, testingAdhan,
+        onToggleAdhanTest = { testingAdhan = !testingAdhan }, onDismiss = { settingsOpen = false }) {
         onPreferences(it)
         settingsOpen = false
     }
@@ -177,7 +179,8 @@ private fun Modifier.panel(highlight: Boolean = false): Modifier = clip(RoundedC
         Color.White.copy(alpha = .06f), Color.White.copy(alpha = .22f))), RoundedCornerShape(22.dp))
 
 @Composable
-private fun DisplaySettings(initial: DisplayPreferences, onDismiss: () -> Unit, onSave: (DisplayPreferences) -> Unit) {
+private fun DisplaySettings(initial: DisplayPreferences, testingAdhan: Boolean,
+    onToggleAdhanTest: () -> Unit, onDismiss: () -> Unit, onSave: (DisplayPreferences) -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var draft by remember { mutableStateOf(initial) }
@@ -197,7 +200,11 @@ private fun DisplaySettings(initial: DisplayPreferences, onDismiss: () -> Unit, 
                         if (UpdateChecker.needsPermission) UpdateChecker.openInstallPermission(context)
                         else scope.launch { UpdateChecker.checkAndInstall(context) }
                     }) { Text(if (UpdateChecker.needsPermission) "Allow app updates" else "Check for update") }
-                    Text("Quran volume: 5%  ·  Adhan volume: 100%", color = Gold, fontSize = 12.sp)
+                    Text("Quiet display · Adhan at prayer times", color = Gold, fontSize = 12.sp)
+                    Text("Live video is silent. The scheduled adhan plays at 100% in-app volume.", color = Muted, fontSize = 12.sp)
+                    OutlinedButton(onClick = onToggleAdhanTest) {
+                        Text(if (testingAdhan) "Stop adhan test" else "Test adhan · Full volume")
+                    }
                     Text("Automatic sky · Minneapolis", color = Gold)
                     Text("Real cloud footage by day. Independently twinkling stars at night. Gradual dawn and dusk follow Minneapolis sunrise and sunset.", color = Muted, fontSize = 13.sp)
                     Row(verticalAlignment = Alignment.CenterVertically) {

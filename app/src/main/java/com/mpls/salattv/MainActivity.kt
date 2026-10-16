@@ -20,7 +20,6 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -49,15 +48,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.layout.ContentScale
@@ -95,15 +91,14 @@ private const val MECCA_HLS_PRIMARY =
     "http://m.live.net.sa:1935/live/quran/playlist.m3u8"
 private const val MECCA_HLS_FALLBACK =
     "https://cdn-globecast.akamaized.net/live/eds/saudi_quran/hls_roku/index.m3u8"
-// Quran-only recordings at 5%; the separate scheduled adhan plays at full volume.
-internal const val QURAN_VOLUME = 0.05f
+// The scheduled adhan is the only audible media in the app.
 internal const val ADHAN_VOLUME = 1.0f
 private const val ADHAN_BOOST_MB = 600 // +6 dB extra boost (file is already loud-mastered)
 // HD adhan (Mishary Al-Afasy, loudness-mastered) played at each prayer, 100% volume.
 private const val ADHAN_URL =
     "https://github.com/izzyent101/marhaba-adhan-quran/releases/download/quran-audio/adhan.mp3"
-// At each prayer time, Quran audio is muted for this long (adhan + prayer), then resumes.
-private const val PRAYER_MUTE_WINDOW_MS = 15L * 60L * 1000L
+// Keep the prayer-time visual message visible for 15 minutes.
+private const val PRAYER_WINDOW_MS = 15L * 60L * 1000L
 private const val UPDATE_CHECK_INTERVAL_MS = 15L * 60L * 1000L // every 15 minutes
 
 // ---- Theme colors -----------------------------------------------------------
@@ -157,10 +152,8 @@ fun MarhabaApp() {
     var weather by remember { mutableStateOf<WeatherData?>(null) }
     var errorMsg by remember { mutableStateOf<String?>(null) }
     var now by remember { mutableStateOf(Date()) }
-    // Quran audio is ON by default; the user can mute it. Video is always silent.
-    var userSoundEnabled by remember { mutableStateOf(true) }
-    // Epoch millis until which ALL audio stays muted after a prayer time.
-    var muteUntil by remember { mutableStateOf(0L) }
+    // End of the prayer-time visual window.
+    var prayerWindowUntil by remember { mutableStateOf(0L) }
 
     // Clock tick (minute resolution displayed).
     LaunchedEffect(Unit) {
@@ -207,26 +200,24 @@ fun MarhabaApp() {
         }
     }
 
-    // Prayer-time trigger: when the clock hits a prayer time, mute everything for the window.
+    // Prayer-time trigger: play the adhan and show the prayer-time message.
     val data = prayerData
     LaunchedEffect(now, data) {
         if (data == null) return@LaunchedEffect
-        if (now.time >= muteUntil) {
+        if (now.time >= prayerWindowUntil) {
             val cal = Calendar.getInstance(TimeZone.getTimeZone("America/Chicago")).apply { time = now }
             val cur = String.format(
                 Locale.US, "%02d:%02d",
                 cal.get(Calendar.HOUR_OF_DAY), cal.get(Calendar.MINUTE)
             )
             if (ADHAN_PRAYERS.any { data.timings[it] == cur }) {
-                muteUntil = now.time + PRAYER_MUTE_WINDOW_MS
+                prayerWindowUntil = now.time + PRAYER_WINDOW_MS
             }
         }
     }
 
-    // Are we inside the prayer/adhan mute window right now?
-    val isPrayerMute = now.time < muteUntil
-    // Quran audio is muted if the user muted it, or during the prayer window.
-    val isQuranMuted = !userSoundEnabled || isPrayerMute
+    // Is the prayer-time visual window active?
+    val isPrayerWindow = now.time < prayerWindowUntil
 
     // Day when between sunrise and sunset (Maghrib); night otherwise.
 
@@ -243,9 +234,7 @@ fun MarhabaApp() {
                     data = data,
                     weather = weather,
                     now = now,
-                    isPrayerMute = isPrayerMute,
-                    isQuranMuted = isQuranMuted,
-                    onToggleMute = { userSoundEnabled = !userSoundEnabled },
+                    isPrayerWindow = isPrayerWindow,
                     preferences = displayPreferences.value,
                     onPreferences = { updated ->
                         displayPreferences.value = updated
@@ -432,9 +421,9 @@ internal fun SunriseIcon(modifier: Modifier = Modifier) {
 @OptIn(UnstableApi::class)
 @Composable
 internal fun StreamView(
-    isPrayerMute: Boolean,
-    isQuranMuted: Boolean,
-    onToggleMute: () -> Unit
+    isPrayerWindow: Boolean,
+    adhanTest: Boolean,
+    onAdhanTestFinished: () -> Unit
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -443,7 +432,7 @@ internal fun StreamView(
     val urls = remember { listOf(MECCA_HLS_PRIMARY, MECCA_HLS_FALLBACK) }
     val handler = remember { Handler(Looper.getMainLooper()) }
 
-    // Makkah video — ALWAYS silent. Audio comes from the Quran track below.
+    // Makkah video is always silent; only scheduled/test adhan can be heard.
     // stall-watchdog bookkeeping
     val lastPos = remember { longArrayOf(0L) }
     val lastProgressTs = remember { longArrayOf(0L) }
@@ -477,43 +466,8 @@ internal fun StreamView(
             }
     }
 
-    // A finite, repeating Quran-only playlist: no radio stations or broadcast adhan.
-    val playbackPrefs = remember { context.getSharedPreferences("quran_playback", 0) }
-    val quranFailures = remember { intArrayOf(0) }
-    val quranPos = remember { longArrayOf(0L) }
-    val quranProgressTs = remember { longArrayOf(0L) }
-
-    val quranPlayer = remember {
-        val httpFactory = DefaultHttpDataSource.Factory()
-            .setUserAgent("MarhabaTV/1.0")
-            .setAllowCrossProtocolRedirects(true)
-            .setConnectTimeoutMs(15000)
-            .setReadTimeoutMs(15000)
-        ExoPlayer.Builder(context)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(httpFactory))
-            .build().apply {
-                setMediaItems(QuranPlaylist.urls.map { MediaItem.fromUri(it) },
-                    playbackPrefs.getInt("index", 0).coerceIn(0, 113),
-                    playbackPrefs.getLong("position", 0L).coerceAtLeast(0L))
-                repeatMode = Player.REPEAT_MODE_ALL
-                volume = QURAN_VOLUME
-                playWhenReady = true
-                prepare()
-            }
-    }
-
-
-    // Save progress without writing on every clock tick.
-    LaunchedEffect(quranPlayer) {
-        while (true) {
-            kotlinx.coroutines.delay(30_000L)
-            playbackPrefs.edit().putInt("index", quranPlayer.currentMediaItemIndex.coerceAtLeast(0))
-                .putLong("position", quranPlayer.currentPosition.coerceAtLeast(0L)).apply()
-        }
-    }
-
-    // Self-healing reconnect for video and recordings.
-    DisposableEffect(livePlayer, quranPlayer) {
+    // Self-healing reconnect for the silent live video.
+    DisposableEffect(livePlayer) {
         // Reload the live stream at the live edge, alternating source after repeated trouble.
         fun recoverLive(switchUrl: Boolean) {
             try {
@@ -562,24 +516,6 @@ internal fun StreamView(
             }
         }
 
-        // Retry the recording; after repeated failures move to another Quran file.
-        // No live audio fallback is permitted.
-        fun recoverQuran() {
-            try {
-                val shouldPlay = quranPlayer.playWhenReady
-                quranFailures[0]++
-                if (quranFailures[0] >= 3) {
-                    quranPlayer.seekTo((quranPlayer.currentMediaItemIndex + 1) % QuranPlaylist.urls.size, 0L)
-                    quranFailures[0] = 0
-                }
-                quranPlayer.prepare()
-                quranPlayer.playWhenReady = shouldPlay
-                quranPos[0] = quranPlayer.currentPosition
-                quranProgressTs[0] = SystemClock.elapsedRealtime()
-            } catch (_: Exception) {}
-        }
-
-        // Recover only active playback; prayer pauses must remain paused.
         val watchdog = object : Runnable {
             override fun run() {
                 try {
@@ -597,58 +533,35 @@ internal fun StreamView(
                             if (liveFailCount[0] >= 2) liveFailCount[0] = 0
                         }
                     }
-                    if (quranPlayer.playWhenReady) {
-                        val qs = quranPlayer.playbackState
-                        val qp = quranPlayer.currentPosition
-                        if (quranProgressTs[0] == 0L) quranProgressTs[0] = nowT
-                        if (qs == Player.STATE_READY && qp > quranPos[0] + 250L) {
-                            quranPos[0] = qp; quranProgressTs[0] = nowT; quranFailures[0] = 0
-                        } else if (qs == Player.STATE_IDLE || (nowT - quranProgressTs[0]) > 20000L) {
-                            recoverQuran()
-                        }
-                    }
                 } catch (_: Exception) {}
                 handler.postDelayed(this, 4000)
             }
         }
         handler.postDelayed(watchdog, 6000)
 
-        val quranListener = object : Player.Listener {
-            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-                quranPos[0] = 0L
-                quranProgressTs[0] = SystemClock.elapsedRealtime()
-            }
-            override fun onPlayerError(error: PlaybackException) {
-                handler.postDelayed({ recoverQuran() }, 3000)
-            }
-        }
         livePlayer.addListener(liveListener)
-        quranPlayer.addListener(quranListener)
         onDispose {
             handler.removeCallbacksAndMessages(null)
             livePlayer.removeListener(liveListener)
             livePlayer.removeAnalyticsListener(frameListener)
-            quranPlayer.removeListener(quranListener)
             livePlayer.release()
-            playbackPrefs.edit().putInt("index", quranPlayer.currentMediaItemIndex.coerceAtLeast(0))
-                .putLong("position", quranPlayer.currentPosition.coerceAtLeast(0L)).apply()
-            quranPlayer.release()
         }
     }
 
     // Adhan player: 100% volume at prayer time, or when the on-screen Test
     // button is pressed. Test auto-stops when the adhan audio finishes.
-    val adhanTest = remember { mutableStateOf(false) }
-    var testFocused by remember { mutableStateOf(false) }
-    var muteFocused by remember { mutableStateOf(false) }
+    val finishTest by rememberUpdatedState(onAdhanTestFinished)
+    var adhanPlaying by remember { mutableStateOf(false) }
     val adhanPlayer = remember { ExoPlayer.Builder(context).build() }
     // Loudness booster attached to the adhan's audio session (+6 dB).
     val adhanBooster = remember { arrayOfNulls<LoudnessEnhancer>(1) }
     DisposableEffect(adhanPlayer) {
         val listener = object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
-                if (state == Player.STATE_ENDED) adhanTest.value = false
+                if (state == Player.STATE_ENDED) finishTest()
             }
+            override fun onIsPlayingChanged(isPlaying: Boolean) { adhanPlaying = isPlaying }
+            override fun onPlayerError(error: PlaybackException) { finishTest() }
             override fun onAudioSessionIdChanged(audioSessionId: Int) {
                 try {
                     adhanBooster[0]?.release()
@@ -667,15 +580,13 @@ internal fun StreamView(
         }
     }
 
-    val quranShouldPlay by rememberUpdatedState(!isQuranMuted && !adhanTest.value)
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_START, Lifecycle.Event.ON_RESUME -> {
                     livePlayer.playWhenReady = true; livePlayer.play()
-                    quranPlayer.playWhenReady = quranShouldPlay
                 }
-                Lifecycle.Event.ON_STOP -> { livePlayer.pause(); quranPlayer.pause(); adhanPlayer.pause() }
+                Lifecycle.Event.ON_STOP -> { livePlayer.pause(); adhanPlayer.pause() }
                 else -> {}
             }
         }
@@ -683,16 +594,7 @@ internal fun StreamView(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    // Pause the recording for prayer/test/user mute, then resume at the same position.
-    LaunchedEffect(isQuranMuted, adhanTest.value) {
-        val paused = isQuranMuted || adhanTest.value
-        quranPlayer.volume = if (paused) 0f else QURAN_VOLUME
-        quranPlayer.playWhenReady = !paused && lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
-        quranProgressTs[0] = SystemClock.elapsedRealtime()
-        quranPos[0] = quranPlayer.currentPosition
-    }
-
-    val adhanActive = isPrayerMute || adhanTest.value
+    val adhanActive = isPrayerWindow || adhanTest
     LaunchedEffect(adhanActive) {
         if (adhanActive) {
             try {
@@ -732,140 +634,21 @@ internal fun StreamView(
                 }
             }
         )
-        Box(
-            Modifier.align(Alignment.TopStart).padding(16.dp)
-                .clip(RoundedCornerShape(3.dp)).background(Color(0xFFB91C1C)).padding(horizontal = 8.dp, vertical = 2.dp)
-        ) { Text("LIVE", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1) }
-
-        Row(
-            Modifier.align(Alignment.TopStart).padding(start = 62.dp, top = 16.dp),
-            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            Box(Modifier.size(8.dp).clip(CircleShape).background(Color(0xFF22C55E)))
-            Text("MAKKAH", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+        Row(Modifier.align(Alignment.TopStart).padding(14.dp)
+            .clip(RoundedCornerShape(50)).background(Color.Black.copy(alpha = .55f))
+            .border(1.dp, Color.White.copy(alpha = .22f), RoundedCornerShape(50))
+            .padding(horizontal = 12.dp, vertical = 7.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+            Box(Modifier.size(6.dp).clip(CircleShape).background(Color(0xFF74D9AE)))
+            Text("MAKKAH LIVE", color = Color.White, fontSize = 10.sp,
+                letterSpacing = 1.sp, fontWeight = FontWeight.Medium)
         }
-
-        // Bottom status bar — frosted glass, now-playing + prayer/adhan pause status.
-        Box(
-            Modifier.align(Alignment.BottomCenter).fillMaxWidth()
-                .background(
-                    Brush.verticalGradient(
-                        listOf(Color.Black.copy(alpha = 0.40f), Color.Black.copy(alpha = 0.72f))
-                    )
-                )
-        ) {
-            // Fixed glass sheen avoids an unnecessary continuously moving overlay.
-            Canvas(Modifier.matchParentSize()) {
-                val w = size.width; val h = size.height
-                drawRect(Color.White.copy(alpha = 0.16f), topLeft = Offset(0f, 0f), size = Size(w, 1.5.dp.toPx()))
-                drawRect(
-                    Brush.verticalGradient(
-                        0f to Color.White.copy(alpha = 0.08f),
-                        0.6f to Color.Transparent,
-                        1f to Color.Transparent
-                    )
-                )
-
-            }
-
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Row(
-                    modifier = Modifier.weight(1f),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    when {
-                        isPrayerMute || adhanTest.value -> {
-                            SpeakerIcon(muted = true)
-                            Column {
-                                Text(if (adhanTest.value) "Adhan · Test" else "Adhan · Prayer Time", color = Amber, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1)
-                                Text(if (adhanTest.value) "Quran resumes when test ends" else "Quran resumes after prayer", color = Color.White.copy(alpha = 0.75f), fontSize = 12.sp, maxLines = 1)
-                            }
-                        }
-                        isQuranMuted -> {
-                            SpeakerIcon(muted = true)
-                            Text("Quran audio muted", color = Color.White.copy(alpha = 0.8f), fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 1)
-                        }
-                        else -> {
-                            EqualizerIcon()
-                            Column {
-                                Text("Holy Qur'an · Recitation", color = Amber, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
-                                Text(QuranPlaylist.reciter, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            }
-                        }
-                    }
-                }
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    // Test-adhan button: previews the adhan at full volume; tap again to stop.
-                    Box(
-                        Modifier.clip(RoundedCornerShape(18.dp))
-                            .background(if (adhanTest.value) Amber.copy(alpha = 0.9f) else Color.White.copy(alpha = 0.08f))
-                            .border(2.dp, if (testFocused) Amber else Color.White.copy(alpha = 0.14f), RoundedCornerShape(18.dp))
-                            .onFocusChanged { testFocused = it.isFocused }
-                            .clickable { adhanTest.value = !adhanTest.value }
-                            .padding(horizontal = 14.dp, vertical = 9.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            if (adhanTest.value) "Stop Test" else "Test Adhan",
-                            color = if (adhanTest.value) Color.Black else Color.White.copy(alpha = 0.85f),
-                            fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1
-                        )
-                    }
-                    // Mute toggle (controls the Quran audio).
-                    Box(
-                        Modifier.size(40.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.08f))
-                            .border(2.dp, if (muteFocused) Amber else Color.White.copy(alpha = 0.12f), CircleShape)
-                            .semantics { contentDescription = if (isQuranMuted) "Unmute Quran" else "Mute Quran" }
-                            .onFocusChanged { muteFocused = it.isFocused }
-                            .clickable { onToggleMute() },
-                        contentAlignment = Alignment.Center
-                    ) { SpeakerIcon(muted = isQuranMuted) }
-                }
-            }
-        }
-    }
-}
-
-// Small animated equalizer to indicate audio is playing.
-@Composable
-private fun EqualizerIcon(modifier: Modifier = Modifier) {
-    val tr = rememberInfiniteTransition(label = "eq")
-    val a by tr.animateFloat(0.3f, 1f, infiniteRepeatable(tween(500, easing = LinearEasing), RepeatMode.Reverse), label = "a")
-    val b by tr.animateFloat(1f, 0.4f, infiniteRepeatable(tween(650, easing = LinearEasing), RepeatMode.Reverse), label = "b")
-    val c by tr.animateFloat(0.5f, 1f, infiniteRepeatable(tween(800, easing = LinearEasing), RepeatMode.Reverse), label = "c")
-    Canvas(modifier = modifier.size(22.dp)) {
-        val w = size.width; val h = size.height
-        val bw = w * 0.22f
-        val heights = listOf(a, b, c)
-        heights.forEachIndexed { i, frac ->
-            val x = w * (0.12f + i * 0.32f)
-            val barH = h * frac
-            drawRect(Amber, topLeft = Offset(x, h - barH), size = Size(bw, barH))
-        }
-    }
-}
-
-@Composable
-private fun SpeakerIcon(muted: Boolean) {
-    val c = Color.White.copy(alpha = 0.8f)
-    Canvas(modifier = Modifier.size(20.dp)) {
-        val w = size.width; val h = size.height
-        drawRect(c, topLeft = Offset(w * 0.10f, h * 0.35f), size = Size(w * 0.18f, h * 0.30f))
-        val path = Path().apply {
-            moveTo(w * 0.28f, h * 0.35f); lineTo(w * 0.50f, h * 0.18f)
-            lineTo(w * 0.50f, h * 0.82f); lineTo(w * 0.28f, h * 0.65f); close()
-        }
-        drawPath(path, c)
-        if (muted) {
-            drawLine(Color(0xFFEF4444), Offset(w * 0.60f, h * 0.30f), Offset(w * 0.90f, h * 0.70f), strokeWidth = w * 0.07f, cap = StrokeCap.Round)
-        } else {
-            drawLine(c, Offset(w * 0.62f, h * 0.40f), Offset(w * 0.62f, h * 0.60f), strokeWidth = w * 0.05f, cap = StrokeCap.Round)
-            drawLine(c, Offset(w * 0.78f, h * 0.32f), Offset(w * 0.78f, h * 0.68f), strokeWidth = w * 0.05f, cap = StrokeCap.Round)
+        if (adhanPlaying) {
+            Text("Adhan  ·  الأذان", color = Amber, fontSize = 13.sp,
+                modifier = Modifier.align(Alignment.BottomStart).padding(14.dp)
+                    .clip(RoundedCornerShape(12.dp)).background(Color.Black.copy(alpha = .7f))
+                    .padding(horizontal = 12.dp, vertical = 7.dp))
         }
     }
 }

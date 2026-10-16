@@ -45,8 +45,7 @@ class SkyAndAudioTest {
         })
         assertEquals(samples.first().daylight, samples.last().daylight, 0f)
     }
-    @Test fun mandatedAudioLevelsStaySeparate() {
-        assertEquals(.05f, QURAN_VOLUME, 0f)
+    @Test fun adhanRemainsAtFullVolume() {
         assertEquals(1f, ADHAN_VOLUME, 0f)
     }
     @Test fun nonBuildTagsCannotBecomeUpdates() {
