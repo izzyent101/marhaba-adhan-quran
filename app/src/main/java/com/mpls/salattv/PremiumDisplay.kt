@@ -189,7 +189,8 @@ private fun DisplaySettings(initial: DisplayPreferences, onDismiss: () -> Unit, 
                     OutlinedTextField(value = draft.welcome, onValueChange = { draft = draft.copy(welcome = it.take(48)) },
                         label = { Text("Welcome message") }, singleLine = true)
                     Text("App version ${BuildConfig.VERSION_CODE}", color = Gold)
-                    Text("Live video: ${LivePlaybackDiagnostics.quality}", fontSize = 12.sp)
+                    Text("Live video: ${LivePlaybackDiagnostics.quality} · ${LivePlaybackDiagnostics.state}", fontSize = 12.sp)
+                    Text("${LivePlaybackDiagnostics.bufferSeconds}s video ready · ${LivePlaybackDiagnostics.rebuffers} loading interruptions", fontSize = 12.sp)
                     Text("${LivePlaybackDiagnostics.droppedFrames} dropped frames reported this session", fontSize = 12.sp)
                     Text(UpdateChecker.status, color = Muted, fontSize = 13.sp)
                     OutlinedButton(enabled = !UpdateChecker.busy, onClick = {

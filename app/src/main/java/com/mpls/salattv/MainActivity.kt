@@ -456,6 +456,12 @@ internal fun StreamView(
             .setConnectTimeoutMs(15000)
             .setReadTimeoutMs(15000)
         ExoPlayer.Builder(context)
+            // The HD source publishes 10–12-second segments. Keep enough video
+            // queued to bridge a late segment instead of hovering at the live edge.
+            .setLoadControl(androidx.media3.exoplayer.DefaultLoadControl.Builder()
+                .setBufferDurationsMs(15000, 45000, 5000, 10000)
+                .setPrioritizeTimeOverSizeThresholds(true)
+                .build())
             .setMediaSourceFactory(DefaultMediaSourceFactory(httpFactory))
             .build().apply {
                 repeatMode = Player.REPEAT_MODE_ALL
@@ -523,6 +529,9 @@ internal fun StreamView(
         }
 
         LivePlaybackDiagnostics.droppedFrames = 0
+        LivePlaybackDiagnostics.rebuffers = 0
+        var hasPlayedLive = false
+        var wasBuffering = false
         val frameListener = object : androidx.media3.exoplayer.analytics.AnalyticsListener {
             override fun onDroppedVideoFrames(
                 eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
@@ -531,6 +540,17 @@ internal fun StreamView(
         }
         livePlayer.addAnalyticsListener(frameListener)
         val liveListener = object : Player.Listener {
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                val buffering = playbackState == Player.STATE_BUFFERING
+                if (buffering && !wasBuffering && hasPlayedLive) LivePlaybackDiagnostics.rebuffers++
+                wasBuffering = buffering
+                if (playbackState == Player.STATE_READY) hasPlayedLive = true
+                LivePlaybackDiagnostics.state = when (playbackState) {
+                    Player.STATE_BUFFERING -> "Loading video"
+                    Player.STATE_READY -> "Playing"
+                    else -> "Connecting"
+                }
+            }
             override fun onEvents(player: Player, events: Player.Events) {
                 livePlayer.videoFormat?.let { format ->
                     LivePlaybackDiagnostics.quality = "${format.height}p" +
@@ -565,12 +585,13 @@ internal fun StreamView(
                 try {
                     val nowT = SystemClock.elapsedRealtime()
                     if (livePlayer.playWhenReady) {
+                        LivePlaybackDiagnostics.bufferSeconds = (livePlayer.totalBufferedDuration / 1000).toInt()
                         val state = livePlayer.playbackState
                         val pos = livePlayer.currentPosition
                         if (lastProgressTs[0] == 0L) lastProgressTs[0] = nowT
-                        if (state == Player.STATE_READY && pos > lastPos[0] + 250L) {
+                        if (state == Player.STATE_READY && livePositionChanged(lastPos[0], pos)) {
                             lastPos[0] = pos; lastProgressTs[0] = nowT; liveFailCount[0] = 0
-                        } else if (state == Player.STATE_IDLE || (nowT - lastProgressTs[0]) > 12000L) {
+                        } else if (state == Player.STATE_IDLE || (nowT - lastProgressTs[0]) > 45000L) {
                             liveFailCount[0]++
                             recoverLive(switchUrl = liveFailCount[0] >= 2)
                             if (liveFailCount[0] >= 2) liveFailCount[0] = 0
@@ -920,13 +941,18 @@ private fun parseMinutes(hhmm: String?): Int? {
     return h * 60 + m
 }
 
+// HLS positions are relative to a sliding playlist: healthy playback can move
+// backwards numerically each time an old segment leaves the window.
+internal fun livePositionChanged(previous: Long, current: Long): Boolean =
+    kotlin.math.abs(current - previous) > 250L
+
 // Live HLS media item with a target live-edge offset so the player can re-sync to "now".
 private fun liveMediaItem(url: String): MediaItem =
     MediaItem.Builder()
         .setUri(url)
         .setLiveConfiguration(
             MediaItem.LiveConfiguration.Builder()
-                .setTargetOffsetMs(12000)
+                .setTargetOffsetMs(25000)
                 // Keep a steady cadence instead of accelerating/decelerating to chase live.
                 .setMinPlaybackSpeed(1f)
                 .setMaxPlaybackSpeed(1f)
