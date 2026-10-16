@@ -618,20 +618,14 @@ internal fun StreamView(
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = { ctx ->
-                (android.view.LayoutInflater.from(ctx).inflate(R.layout.live_video, null) as PlayerView).apply {
-                    // Native clipping contains the independently composed video surface.
-                    clipToOutline = true
-                    outlineProvider = object : android.view.ViewOutlineProvider() {
-                        override fun getOutline(view: android.view.View, outline: android.graphics.Outline) {
-                            outline.setRoundRect(0, 0, view.width, view.height, 24f * resources.displayMetrics.density)
-                        }
-                    }
+                val video = (android.view.LayoutInflater.from(ctx).inflate(R.layout.live_video, null) as PlayerView).apply {
                     player = livePlayer
                     useController = false
                     setShutterBackgroundColor(AndroidColor.BLACK)
                     resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
                     setKeepContentOnPlayerReset(true)
                 }
+                BroadcastVideoFrame(ctx).apply { addView(video) }
             }
         )
         Row(Modifier.align(Alignment.TopStart).padding(14.dp)
