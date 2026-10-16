@@ -522,7 +522,21 @@ internal fun StreamView(
             } catch (_: Exception) {}
         }
 
+        LivePlaybackDiagnostics.droppedFrames = 0
+        val frameListener = object : androidx.media3.exoplayer.analytics.AnalyticsListener {
+            override fun onDroppedVideoFrames(
+                eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
+                droppedFrames: Int, elapsedMs: Long
+            ) { LivePlaybackDiagnostics.droppedFrames += droppedFrames }
+        }
+        livePlayer.addAnalyticsListener(frameListener)
         val liveListener = object : Player.Listener {
+            override fun onEvents(player: Player, events: Player.Events) {
+                livePlayer.videoFormat?.let { format ->
+                    LivePlaybackDiagnostics.quality = "${format.height}p" +
+                        if (format.frameRate > 0) " · ${"%.1f".format(Locale.US, format.frameRate)} fps source" else ""
+                }
+            }
             override fun onPlayerError(error: PlaybackException) {
                 handler.postDelayed({ recoverLive(switchUrl = true) }, 3000)
             }
@@ -592,6 +606,7 @@ internal fun StreamView(
         onDispose {
             handler.removeCallbacksAndMessages(null)
             livePlayer.removeListener(liveListener)
+            livePlayer.removeAnalyticsListener(frameListener)
             quranPlayer.removeListener(quranListener)
             livePlayer.release()
             playbackPrefs.edit().putInt("index", quranPlayer.currentMediaItemIndex.coerceAtLeast(0))
@@ -681,6 +696,13 @@ internal fun StreamView(
             modifier = Modifier.fillMaxSize(),
             factory = { ctx ->
                 (android.view.LayoutInflater.from(ctx).inflate(R.layout.live_video, null) as PlayerView).apply {
+                    // Native clipping contains the independently composed video surface.
+                    clipToOutline = true
+                    outlineProvider = object : android.view.ViewOutlineProvider() {
+                        override fun getOutline(view: android.view.View, outline: android.graphics.Outline) {
+                            outline.setRoundRect(0, 0, view.width, view.height, 24f * resources.displayMetrics.density)
+                        }
+                    }
                     player = livePlayer
                     useController = false
                     setShutterBackgroundColor(AndroidColor.BLACK)
@@ -905,6 +927,9 @@ private fun liveMediaItem(url: String): MediaItem =
         .setLiveConfiguration(
             MediaItem.LiveConfiguration.Builder()
                 .setTargetOffsetMs(12000)
+                // Keep a steady cadence instead of accelerating/decelerating to chase live.
+                .setMinPlaybackSpeed(1f)
+                .setMaxPlaybackSpeed(1f)
                 .build()
         )
         .build()
