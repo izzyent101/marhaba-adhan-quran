@@ -239,7 +239,6 @@ fun MarhabaApp() {
                     onPreferences = { updated ->
                         displayPreferences.value = updated
                         context.getSharedPreferences("marhaba_display", 0).edit()
-                            .putString("welcome", updated.welcome)
                             .putBoolean("arabic", updated.arabic)
                             .putBoolean("clock24", updated.clock24)
                             .apply()

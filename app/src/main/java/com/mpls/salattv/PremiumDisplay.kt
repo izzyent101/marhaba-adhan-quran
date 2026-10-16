@@ -19,6 +19,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -46,7 +49,6 @@ private val Cream = Color(0xFFF5F0E5)
 private val Muted = Color(0xFFABC0BD)
 
 internal data class DisplayPreferences(
-    val welcome: String = "Welcome to Marhaba Grill",
     val arabic: Boolean = true,
     val clock24: Boolean = false
 )
@@ -57,7 +59,6 @@ internal fun rememberDisplayPreferences(): MutableState<DisplayPreferences> {
     return remember {
         val saved = context.getSharedPreferences("marhaba_display", 0)
         mutableStateOf(DisplayPreferences(
-            welcome = saved.getString("welcome", "Welcome to Marhaba Grill") ?: "Welcome to Marhaba Grill",
             arabic = saved.getBoolean("arabic", true),
             clock24 = saved.getBoolean("clock24", false)
         ))
@@ -73,24 +74,18 @@ internal fun PremiumScreen(
     var settingsOpen by remember { mutableStateOf(false) }
     var testingAdhan by remember { mutableStateOf(false) }
     val next = computeNextPrayer(data.timings, now)
-    val holiday = PrayerRepository.getHolidayMessage(data.hijriMonthNumber, data.hijriDay)
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Row(Modifier.fillMaxWidth().height(72.dp), verticalAlignment = Alignment.CenterVertically) {
             Image(painterResource(R.drawable.marhaba_logo), "Marhaba Grill",
                 Modifier.width(150.dp).fillMaxHeight(), contentScale = ContentScale.Fit)
-            Box(Modifier.padding(horizontal = 20.dp).width(1.dp).height(40.dp).background(Gold.copy(alpha = .3f)))
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(holiday?.en ?: preferences.welcome, color = Cream, fontSize = 20.sp,
-                    fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(if (holiday != null && preferences.arabic) holiday.ar else "MINNEAPOLIS  ·  MAKKAH LIVE",
-                    color = Gold, fontSize = 10.sp, letterSpacing = 2.sp, maxLines = 1)
-            }
+            Spacer(Modifier.weight(1f))
             Column(horizontalAlignment = Alignment.End) {
-                Text(SimpleDateFormat(if (preferences.clock24) "HH:mm" else "h:mm a", Locale.US).apply { timeZone = TimeZone.getTimeZone("America/Chicago") }.format(now),
-                    color = Cream, fontSize = 36.sp, fontWeight = FontWeight.Light, maxLines = 1)
+                DigitalClock(now, preferences.clock24)
                 Text(SimpleDateFormat("EEE, MMM d", Locale.US).apply { timeZone = TimeZone.getTimeZone("America/Chicago") }.format(now) + "  ·  ${data.hijriDay} ${data.hijriMonthEn}",
                     color = Muted, fontSize = 11.sp, maxLines = 1)
             }
+            Spacer(Modifier.width(18.dp))
+            SettingsGear(onClick = { settingsOpen = true })
         }
         Row(Modifier.weight(1f).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(18.dp)) {
             Column(Modifier.weight(.60f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -149,14 +144,7 @@ internal fun PremiumScreen(
                 }
             }
         }
-        Row(Modifier.fillMaxWidth().height(32.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("A space to gather. A moment to reflect.", color = Cream, fontSize = 11.sp)
-            Text("مساحةٌ للّقاء، ولحظةٌ للتأمّل", color = Gold, fontSize = 13.sp,
-                modifier = Modifier.weight(1f).padding(start = 20.dp), maxLines = 1)
-            TextButton(onClick = { settingsOpen = true }, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)) {
-                Text(if (UpdateChecker.needsPermission) "Allow app updates" else "Display & updates", color = Gold, fontSize = 11.sp)
-            }
-        }
+
     }
     if (settingsOpen) DisplaySettings(preferences, testingAdhan,
         onToggleAdhanTest = { testingAdhan = !testingAdhan }, onDismiss = { settingsOpen = false }) {
@@ -185,12 +173,10 @@ private fun DisplaySettings(initial: DisplayPreferences, testingAdhan: Boolean,
     val scope = rememberCoroutineScope()
     var draft by remember { mutableStateOf(initial) }
     MaterialTheme(colorScheme = darkColorScheme(primary = Gold, onPrimary = Ink, surface = Ink, onSurface = Cream)) {
-        AlertDialog(onDismissRequest = onDismiss, title = { Text("Make it Marhaba") },
+        AlertDialog(onDismissRequest = onDismiss, title = { Text("Display settings") },
             text = {
                 Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text("Preferences are saved on this TV.", color = Muted)
-                    OutlinedTextField(value = draft.welcome, onValueChange = { draft = draft.copy(welcome = it.take(48)) },
-                        label = { Text("Welcome message") }, singleLine = true)
                     Text("App version ${BuildConfig.VERSION_CODE}", color = Gold)
                     Text("Live video: ${LivePlaybackDiagnostics.quality} · ${LivePlaybackDiagnostics.state}", fontSize = 12.sp)
                     Text("${LivePlaybackDiagnostics.bufferSeconds}s video ready · ${LivePlaybackDiagnostics.rebuffers} loading interruptions", fontSize = 12.sp)
@@ -220,7 +206,35 @@ private fun DisplaySettings(initial: DisplayPreferences, testingAdhan: Boolean,
                         android.net.Uri.parse("https://commons.wikimedia.org/wiki/File:Clouds_(time_lapse).webm"))) }) { Text("Footage source & license", fontSize = 11.sp) }
                 }
             },
-            confirmButton = { TextButton(onClick = { onSave(draft.copy(welcome = draft.welcome.trim().ifBlank { "Welcome to Marhaba Grill" })) }) { Text("Save display") } },
+            confirmButton = { TextButton(onClick = { onSave(draft) }) { Text("Save display") } },
             dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
+    }
+}
+
+@Composable
+private fun SettingsGear(onClick: () -> Unit) {
+    var focused by remember { mutableStateOf(false) }
+    IconButton(onClick = onClick, modifier = Modifier.size(38.dp)
+        .onFocusChanged { focused = it.isFocused }
+        .clip(androidx.compose.foundation.shape.CircleShape)
+        .background(Color.White.copy(alpha = .06f))
+        .border(if (focused) 2.dp else 1.dp, if (focused) Gold else Color.White.copy(alpha = .18f),
+            androidx.compose.foundation.shape.CircleShape)
+        .semantics { contentDescription = "Display settings and app updates" }) {
+        Canvas(Modifier.size(21.dp)) {
+            val center = Offset(size.width / 2, size.height / 2)
+            val r = size.width * .44f
+            val gear = Path()
+            for (i in 0 until 64) {
+                val angle = i * 2 * Math.PI / 64 - Math.PI / 2
+                val radius = r * if (i % 8 in 2..5) 1f else .78f
+                val x = center.x + cos(angle).toFloat() * radius
+                val y = center.y + sin(angle).toFloat() * radius
+                if (i == 0) gear.moveTo(x, y) else gear.lineTo(x, y)
+            }
+            gear.close()
+            drawPath(gear, Cream.copy(alpha = .9f), style = Stroke(1.4.dp.toPx()))
+            drawCircle(Cream.copy(alpha = .9f), size.width * .14f, center, style = Stroke(1.4.dp.toPx()))
+        }
     }
 }
