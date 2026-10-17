@@ -28,6 +28,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -75,17 +76,44 @@ internal fun PremiumScreen(
     var testingAdhan by remember { mutableStateOf(false) }
     val next = computeNextPrayer(data.timings, now)
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        Row(Modifier.fillMaxWidth().height(72.dp), verticalAlignment = Alignment.CenterVertically) {
-            Image(painterResource(R.drawable.marhaba_logo), "Marhaba Grill",
-                Modifier.width(150.dp).fillMaxHeight(), contentScale = ContentScale.Fit)
-            Spacer(Modifier.weight(1f))
-            Column(horizontalAlignment = Alignment.End) {
-                DigitalClock(now, preferences.clock24)
-                Text(SimpleDateFormat("EEE, MMM d", Locale.US).apply { timeZone = TimeZone.getTimeZone("America/Chicago") }.format(now) + "  ·  ${data.hijriDay} ${data.hijriMonthEn}",
-                    color = Muted, fontSize = 11.sp, maxLines = 1)
+        Box(Modifier.fillMaxWidth().height(84.dp)) {
+            Column(Modifier.align(Alignment.CenterStart).widthIn(max = 290.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                fun date(pattern: String, locale: Locale) = SimpleDateFormat(pattern, locale).apply {
+                    timeZone = TimeZone.getTimeZone("America/Chicago")
+                }.format(now)
+                Text(date("EEEE, MMMM d, yyyy", Locale.US), color = Cream, fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium, maxLines = 1)
+                Text(date("EEEE، d MMMM yyyy", Locale.forLanguageTag("ar")), color = Cream.copy(alpha = .88f),
+                    fontSize = 13.sp, maxLines = 1)
+                Text("${data.hijriDay} ${data.hijriMonthEn} ${data.hijriYear}", color = Gold,
+                    fontSize = 10.sp, maxLines = 1)
+                val arabicNumbers = java.text.NumberFormat.getIntegerInstance(Locale.forLanguageTag("ar")).apply {
+                    isGroupingUsed = false
+                }
+                Text("${arabicNumbers.format(data.hijriDay)} ${data.hijriMonthAr} ${data.hijriYear.map { if (it in '0'..'9') ('٠'.code + it.digitToInt()).toChar() else it }.joinToString("")} هـ",
+                    color = Gold.copy(alpha = .88f), fontSize = 12.sp, maxLines = 1)
             }
-            Spacer(Modifier.width(18.dp))
-            SettingsGear(onClick = { settingsOpen = true })
+            Box(Modifier.align(Alignment.Center).width(230.dp).fillMaxHeight(), contentAlignment = Alignment.Center) {
+                Canvas(Modifier.matchParentSize()) {
+                    val center = Offset(size.width / 2, size.height / 2)
+                    val radius = size.height * .49f
+                    withTransform({ scale(size.width / size.height, 1f, center) }) {
+                        drawCircle(Brush.radialGradient(listOf(
+                            Gold.copy(alpha = .15f), Gold.copy(alpha = .055f), Color.Transparent),
+                            center = center, radius = radius), radius = radius, center = center)
+                    }
+                    drawCircle(Brush.radialGradient(listOf(Color.White.copy(alpha = .045f), Color.Transparent),
+                        center = center, radius = radius), radius = radius, center = center)
+                }
+                Image(painterResource(R.drawable.marhaba_logo), "Marhaba Grill",
+                    Modifier.width(160.dp).fillMaxHeight(), contentScale = ContentScale.Fit)
+            }
+            Row(Modifier.align(Alignment.CenterEnd), verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+                DigitalClock(now, preferences.clock24)
+                SettingsGear(onClick = { settingsOpen = true })
+            }
         }
         Row(Modifier.weight(1f).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(18.dp)) {
             Column(Modifier.weight(.60f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
