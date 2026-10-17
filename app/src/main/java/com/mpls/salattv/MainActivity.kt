@@ -43,6 +43,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -122,6 +124,24 @@ class MainActivity : ComponentActivity() {
         }
         forceImmersive()
         setContent { MarhabaApp() }
+    }
+
+    override fun onUserInteraction() {
+        super.onUserInteraction()
+        SettingsVisibility.reveal()
+    }
+
+    override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent): Boolean {
+        val revealsSettings = keyCode in setOf(
+            android.view.KeyEvent.KEYCODE_DPAD_UP, android.view.KeyEvent.KEYCODE_DPAD_DOWN,
+            android.view.KeyEvent.KEYCODE_DPAD_LEFT, android.view.KeyEvent.KEYCODE_DPAD_RIGHT,
+            android.view.KeyEvent.KEYCODE_DPAD_CENTER, android.view.KeyEvent.KEYCODE_ENTER,
+            android.view.KeyEvent.KEYCODE_MENU)
+        if (revealsSettings && !SettingsVisibility.dialogOpen) {
+            SettingsVisibility.reveal()
+            return true // First unhandled press reveals/focuses the settings gear.
+        }
+        return super.onKeyDown(keyCode, event)
     }
 
     private fun forceImmersive() {
@@ -428,7 +448,10 @@ internal fun StreamView(
     val lifecycleOwner = LocalLifecycleOwner.current
 
     val urlIndex = remember { intArrayOf(0) }
-    val urls = remember { listOf(MECCA_HLS_PRIMARY, MECCA_HLS_FALLBACK) }
+    val urls = remember { mutableListOf(MECCA_HLS_PRIMARY, MECCA_HLS_FALLBACK) }
+    val sourceInitialized = remember { booleanArrayOf(false) }
+    val hasOfficialPrimary = remember { booleanArrayOf(false) }
+    val playbackScope = rememberCoroutineScope()
     val handler = remember { Handler(Looper.getMainLooper()) }
 
     // Makkah video is always silent; only scheduled/test adhan can be heard.
@@ -439,7 +462,8 @@ internal fun StreamView(
 
     val livePlayer = remember {
         val httpFactory = DefaultHttpDataSource.Factory()
-            .setUserAgent("MarhabaTV/1.0")
+            .setUserAgent(OfficialMakkahStream.USER_AGENT)
+            .setDefaultRequestProperties(mapOf("Referer" to OfficialMakkahStream.PAGE, "Origin" to "https://aloula.sba.sa"))
             .setAllowCrossProtocolRedirects(true)
             .setConnectTimeoutMs(15000)
             .setReadTimeoutMs(15000)
@@ -454,19 +478,30 @@ internal fun StreamView(
             .build().apply {
                 repeatMode = Player.REPEAT_MODE_ALL
                 volume = 0f // video is permanently muted
-                // Verified 1280x720 primary; lower-resolution source is failover only.
+                // Prefer the official 1080p rendition; retain lower qualities for resilience.
                 trackSelectionParameters = trackSelectionParameters.buildUpon()
                     .setMaxVideoSize(1920, 1080)
+                    .setForceHighestSupportedBitrate(true)
                     .setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_AUDIO, true)
                     .build()
-                playWhenReady = true
-                setMediaItem(liveMediaItem(urls[0]))
-                prepare()
             }
+    }
+    LaunchedEffect(livePlayer) {
+        val official = OfficialMakkahStream.resolve()
+        if (official != null) {
+            urls.add(0, official)
+            hasOfficialPrimary[0] = true
+        }
+        sourceInitialized[0] = true
+        livePlayer.setMediaItem(liveMediaItem(urls[0]))
+        livePlayer.playWhenReady = true
+        livePlayer.prepare()
     }
 
     // Self-healing reconnect for the silent live video.
     DisposableEffect(livePlayer) {
+        var disposed = false
+        var lastOfficialRefresh = 0L
         // Reload the live stream at the live edge, alternating source after repeated trouble.
         fun recoverLive(switchUrl: Boolean) {
             try {
@@ -511,7 +546,23 @@ internal fun StreamView(
                 }
             }
             override fun onPlayerError(error: PlaybackException) {
-                handler.postDelayed({ recoverLive(switchUrl = true) }, 3000)
+                handler.postDelayed({
+                    playbackScope.launch {
+                        // A fresh public URL renews expired CDN authorization. Limit
+                        // refresh attempts so a CDN outage falls back rather than loops.
+                        val nowT = SystemClock.elapsedRealtime()
+                        val canRefresh = hasOfficialPrimary[0] && urlIndex[0] == 0 &&
+                            (lastOfficialRefresh == 0L || nowT - lastOfficialRefresh > 300000L)
+                        val fresh = if (canRefresh) {
+                            lastOfficialRefresh = nowT
+                            OfficialMakkahStream.resolve()
+                        } else null
+                        if (!disposed) {
+                            if (fresh != null) urls[0] = fresh
+                            recoverLive(switchUrl = fresh == null)
+                        }
+                    }
+                }, 3000)
             }
         }
 
@@ -519,7 +570,7 @@ internal fun StreamView(
             override fun run() {
                 try {
                     val nowT = SystemClock.elapsedRealtime()
-                    if (livePlayer.playWhenReady) {
+                    if (sourceInitialized[0] && livePlayer.playWhenReady) {
                         LivePlaybackDiagnostics.bufferSeconds = (livePlayer.totalBufferedDuration / 1000).toInt()
                         val state = livePlayer.playbackState
                         val pos = livePlayer.currentPosition
@@ -540,6 +591,7 @@ internal fun StreamView(
 
         livePlayer.addListener(liveListener)
         onDispose {
+            disposed = true
             handler.removeCallbacksAndMessages(null)
             livePlayer.removeListener(liveListener)
             livePlayer.removeAnalyticsListener(frameListener)

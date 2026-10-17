@@ -19,6 +19,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.contentDescription
@@ -75,6 +77,20 @@ internal fun PremiumScreen(
     var settingsOpen by remember { mutableStateOf(false) }
     var testingAdhan by remember { mutableStateOf(false) }
     val next = computeNextPrayer(data.timings, now)
+    val gearFocus = remember { FocusRequester() }
+    val controlsVisible = SettingsVisibility.visible
+    LaunchedEffect(SettingsVisibility.lastInteraction, settingsOpen) {
+        if (!settingsOpen && SettingsVisibility.visible) {
+            kotlinx.coroutines.delay(8000)
+            SettingsVisibility.visible = false
+        }
+    }
+    LaunchedEffect(controlsVisible, settingsOpen) {
+        if (controlsVisible && !settingsOpen) {
+            withFrameNanos { }
+            gearFocus.requestFocus()
+        }
+    }
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Box(Modifier.fillMaxWidth().height(84.dp)) {
             Column(Modifier.align(Alignment.CenterStart).widthIn(max = 290.dp),
@@ -112,7 +128,9 @@ internal fun PremiumScreen(
             Row(Modifier.align(Alignment.CenterEnd), verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(18.dp)) {
                 DigitalClock(now, preferences.clock24)
-                SettingsGear(onClick = { settingsOpen = true })
+                Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+                    if (controlsVisible) SettingsGear(gearFocus, onClick = { settingsOpen = true })
+                }
             }
         }
         Row(Modifier.weight(1f).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(18.dp)) {
@@ -159,9 +177,9 @@ internal fun PremiumScreen(
                     }
                 }
                 Column(Modifier.fillMaxWidth().weight(2f).panel().padding(horizontal = 14.dp, vertical = 8.dp)) {
-                    Row(Modifier.fillMaxWidth().padding(bottom = 5.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("TODAY’S PRAYERS", color = Muted, fontSize = 9.sp, letterSpacing = 1.4.sp)
-                        Text("55408", color = Muted, fontSize = 9.sp)
+                    Column(Modifier.fillMaxWidth().padding(bottom = 6.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text("Today’s prayer times", color = Cream, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                        Text("for Minneapolis, MN 55408", color = Muted, fontSize = 10.sp)
                     }
                     val names = listOf("Fajr" to "الفجر", "Dhuhr" to "الظهر", "Asr" to "العصر", "Maghrib" to "المغرب", "Isha" to "العشاء")
                     names.forEach { (name, ar) ->
@@ -208,6 +226,13 @@ private fun DisplaySettings(initial: DisplayPreferences, testingAdhan: Boolean,
     onToggleAdhanTest: () -> Unit, onDismiss: () -> Unit, onSave: (DisplayPreferences) -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    DisposableEffect(Unit) {
+        SettingsVisibility.dialogOpen = true
+        onDispose {
+            SettingsVisibility.dialogOpen = false
+            SettingsVisibility.reveal()
+        }
+    }
     var draft by remember { mutableStateOf(initial) }
     MaterialTheme(colorScheme = darkColorScheme(primary = Gold, onPrimary = Ink, surface = Ink, onSurface = Cream)) {
         AlertDialog(onDismissRequest = onDismiss, title = { Text("Display settings") },
@@ -249,9 +274,10 @@ private fun DisplaySettings(initial: DisplayPreferences, testingAdhan: Boolean,
 }
 
 @Composable
-private fun SettingsGear(onClick: () -> Unit) {
+private fun SettingsGear(focusRequester: FocusRequester, onClick: () -> Unit) {
     var focused by remember { mutableStateOf(false) }
     IconButton(onClick = onClick, modifier = Modifier.size(38.dp)
+        .focusRequester(focusRequester)
         .onFocusChanged { focused = it.isFocused }
         .clip(androidx.compose.foundation.shape.CircleShape)
         .background(Color.White.copy(alpha = .06f))
