@@ -178,7 +178,7 @@ internal fun PremiumScreen(
                 }
                 Column(Modifier.fillMaxWidth().weight(2f).panel().padding(horizontal = 14.dp, vertical = 8.dp)) {
                     Column(Modifier.fillMaxWidth().padding(bottom = 6.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text("Today’s prayer times", color = Cream, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                        Text("Today’s Prayer Times", color = Cream, fontSize = 12.sp, fontWeight = FontWeight.Medium)
                         Text("for Minneapolis, MN 55408", color = Muted, fontSize = 10.sp)
                     }
                     val names = listOf("Fajr" to "الفجر", "Dhuhr" to "الظهر", "Asr" to "العصر", "Maghrib" to "المغرب", "Isha" to "العشاء")
