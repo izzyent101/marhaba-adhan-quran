@@ -12,6 +12,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.text.SimpleDateFormat
@@ -24,12 +25,22 @@ import java.util.TimeZone
 internal fun DigitalClock(now: Date, clock24: Boolean) {
     val zone = TimeZone.getTimeZone("America/Chicago")
     fun format(pattern: String) = SimpleDateFormat(pattern, Locale.US).apply { timeZone = zone }.format(now)
-    val time = format(if (clock24) "HH:mm" else "h:mm")
-    Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp),
-        modifier = Modifier.semantics { contentDescription = format(if (clock24) "HH:mm" else "h:mm a") }) {
-        Canvas(Modifier.width((time.count { it != ':' } * 25 + 10).dp).height(43.dp)) {
+    SegmentedTime(format(if (clock24) "HH:mm" else "h:mm a"))
+}
+
+@Composable
+internal fun SegmentedTime(value: String, height: Dp = 43.dp, active: Color = Color(0xFFF5F0E5)) {
+    val time = value.substringBefore(' ')
+    if (time.isEmpty() || time.any { !it.isDigit() && it != ':' }) {
+        Text("—", color = active, fontSize = 16.sp)
+        return
+    }
+    val period = value.substringAfter(' ', "")
+    val ratio = height.value / 43f
+    Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy((8 * ratio).dp),
+        modifier = Modifier.semantics { contentDescription = value }) {
+        Canvas(Modifier.width(height * ((time.count { it != ':' } * 25 + 10) / 43f)).height(height)) {
             val scale = size.height / 43f
-            val active = Color(0xFFF5F0E5)
             val patterns = arrayOf("abcdef", "bc", "abdeg", "abcdg", "bcfg", "acdfg", "acdefg", "abc", "abcdefg", "abcdfg")
             var x = 0f
             for (c in time) {
@@ -60,7 +71,18 @@ internal fun DigitalClock(now: Date, clock24: Boolean) {
                 }
             }
         }
-        if (!clock24) Text(format("a"), color = Color(0xFFE6C784), fontSize = 10.sp,
-            fontWeight = FontWeight.Medium, letterSpacing = 1.sp, modifier = Modifier.padding(bottom = 3.dp))
+        if (period.isNotEmpty()) Text(period, color = active.copy(alpha = .85f), fontSize = maxOf(8f, 10 * ratio).sp,
+            fontWeight = FontWeight.Medium, letterSpacing = .5.sp, modifier = Modifier.padding(bottom = (3 * ratio).dp))
     }
+}
+
+internal fun formatDisplayTime(time24: String?, clock24: Boolean): String {
+    val parts = time24?.split(":") ?: return "—"
+    if (parts.size != 2) return "—"
+    val hour = parts[0].toIntOrNull() ?: return "—"
+    val minute = parts[1].toIntOrNull() ?: return "—"
+    if (hour !in 0..23 || minute !in 0..59) return "—"
+    return if (clock24) String.format(Locale.US, "%02d:%02d", hour, minute)
+    else String.format(Locale.US, "%d:%02d %s", if (hour % 12 == 0) 12 else hour % 12,
+        minute, if (hour < 12) "AM" else "PM")
 }

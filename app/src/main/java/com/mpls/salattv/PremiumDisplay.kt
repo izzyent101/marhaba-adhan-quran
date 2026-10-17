@@ -133,7 +133,8 @@ internal fun PremiumScreen(
                     Spacer(Modifier.width(10.dp))
                     Column(horizontalAlignment = Alignment.End) {
                         Text(if (isRestaurantDaytime(data.timings, now)) "SUNSET" else "SUNRISE", color = Muted, fontSize = 9.sp, letterSpacing = 1.sp)
-                        Text(to12Hour(data.timings[if (isRestaurantDaytime(data.timings, now)) "Maghrib" else "Sunrise"]), color = Gold, fontSize = 15.sp)
+                        SegmentedTime(formatDisplayTime(data.timings[if (isRestaurantDaytime(data.timings, now)) "Maghrib" else "Sunrise"], preferences.clock24),
+                            height = 20.dp, active = Gold)
                     }
                 }
             }
@@ -145,8 +146,16 @@ internal fun PremiumScreen(
                         Spacer(Modifier.height(5.dp))
                         Text(if (isPrayerWindow) "Prayer time" else next?.name ?: "Updating…", color = Cream,
                             fontSize = 30.sp, fontWeight = FontWeight.Medium, maxLines = 1)
-                        Text(if (isPrayerWindow) "Take a moment to reflect · وقت الصلاة" else next?.let { "In ${formatCountdown(it.diffMs)}  ·  ${to12Hour(data.timings[it.name])}" } ?: "Waiting for prayer times",
-                            color = Gold, fontSize = 13.sp, maxLines = 1)
+                        if (isPrayerWindow || next == null) {
+                            Text(if (isPrayerWindow) "Take a moment to reflect · وقت الصلاة" else "Waiting for prayer times",
+                                color = Gold, fontSize = 13.sp, maxLines = 1)
+                        } else {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                Text("In ${formatCountdown(next.diffMs)}", color = Gold, fontSize = 13.sp)
+                                Text("·", color = Gold.copy(alpha = .5f), fontSize = 13.sp)
+                                SegmentedTime(formatDisplayTime(data.timings[next.name], preferences.clock24), height = 20.dp, active = Gold)
+                            }
+                        }
                     }
                 }
                 Column(Modifier.fillMaxWidth().weight(2f).panel().padding(horizontal = 14.dp, vertical = 8.dp)) {
@@ -165,8 +174,8 @@ internal fun PremiumScreen(
                             Text(name, color = if (selected) Gold else Cream, fontSize = 16.sp,
                                 fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal, modifier = Modifier.weight(1f))
                             if (preferences.arabic) Text(ar, color = Muted, fontSize = 13.sp, modifier = Modifier.padding(end = 12.dp))
-                            Text(to12Hour(data.timings[name]), color = if (selected) Gold else Cream,
-                                fontSize = 17.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+                            SegmentedTime(formatDisplayTime(data.timings[name], preferences.clock24),
+                                height = 22.dp, active = if (selected) Gold else Cream)
                         }
                     }
                 }
